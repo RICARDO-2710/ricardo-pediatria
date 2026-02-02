@@ -3748,10 +3748,10 @@ function DoctorAppointments() {
 const DOCTOR_HEADER = {
   doctorName: "Dr. Ricardo B. Gurgel",
   specialty: "Pediatria",
-  registration: "CRM/PE 00000 • RQE 0000", // ajuste
+  registration: "CRM/PE 17168 • RQE 4151", // ajuste
   clinicName: "Espaço Materno Infantil - Gestar",
   clinicAddress: "Hospital Santa Joana - 1º andar, prédio central - Recife/PE",
-  clinicPhone: "(81) 0000-0000", // ajuste
+  clinicPhone: "(81) 979202-0011", // ajuste
 };
 
 // 🔹 Logo em base64 (exemplo genérico)
