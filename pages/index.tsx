@@ -2650,7 +2650,7 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
                   : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
               )}
             >
-              <ClipboardList className="inline h-4 w-4" /> Gravar consulta
+              <ClipboardList className="inline h-4 w-4" /> Atender
             </button>
           </div>
 
@@ -3766,6 +3766,7 @@ function RecordConsultationMock() {
   const [patientId, setPatientId] = useState<string>("");
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
 
+
   const [evolucao, setEvolucao] = useState("");
   const [doencas, setDoencas] = useState("");
   const [conduta, setConduta] = useState("");
@@ -3776,6 +3777,7 @@ function RecordConsultationMock() {
   // 🔹 Novos campos: peso e altura para alimentar growth_records
   const [weight, setWeight] = useState(""); // kg
   const [height, setHeight] = useState(""); // cm
+  const [headCircumference, setHeadCircumference] = useState(""); // cm
 
   // Carregar lista de crianças do Supabase (pacientes)
   async function loadChildren() {
@@ -3896,8 +3898,11 @@ function RecordConsultationMock() {
       doc.text(`Altura: ${height.trim()} cm`, 10, y);
       y += 6;
     }
+     if (headCircumference.trim()) {
+      doc.text(`Perímetro cefálico: ${headCircumference.trim()} cm`, 10, y);
+      y += 6;
+    }
 
-    y += 6;
 
     // --- FUNÇÃO AUXILIAR PARA BLOCOS DE TEXTO ---
     function bloco(titulo: string, conteudo: string) {
@@ -3976,58 +3981,7 @@ function RecordConsultationMock() {
 
       const doctorEmail = auth.user?.email ?? null;
 
-      // 1) Tenta gerar o PDF em memória
-      let pdfUrl: string | null = null;
-      try {
-        const pdfBlob = createConsultPdfBlob(child);
-
-        // monta um nome de arquivo
-        const safeName = child.name.replace(/\s+/g, "_");
-        const fileName = `consulta_${safeName}_${date}_${Date.now()}.pdf`;
-        const filePath = `${child.id}/${fileName}`;
-
-        // 2) Faz upload para o bucket child-docs
-        const { error: uploadError } = await supabase.storage
-          .from(PDF_BUCKET)
-          .upload(filePath, pdfBlob, {
-            cacheControl: "3600",
-            upsert: false,
-            contentType: "application/pdf",
-          });
-
-        if (uploadError) {
-          console.error(uploadError);
-          alert(
-            "Consulta foi salva, mas deu erro ao subir o PDF. Você ainda pode gerar o PDF manualmente."
-          );
-        } else {
-          // 3) Pega URL pública
-          const { data: publicData } = supabase.storage
-            .from(PDF_BUCKET)
-            .getPublicUrl(filePath);
-
-          pdfUrl = publicData.publicUrl ?? null;
-        }
-      } catch (err: any) {
-        console.error("Erro ao gerar/enviar PDF:", err);
-        alert(
-          "Consulta foi salva, mas houve erro ao gerar/enviar o PDF automático. Você ainda pode usar 'Salvar consulta em PDF' para baixar manualmente."
-        );
-      }
-
-      // 4) Se tiver peso/altura, trata os números
-      const weightTrim = weight.trim();
-      const heightTrim = height.trim();
-      const w =
-        weightTrim.length > 0
-          ? Number(weightTrim.replace(",", "."))
-          : null;
-      const h =
-        heightTrim.length > 0
-          ? Number(heightTrim.replace(",", "."))
-          : null;
-
-      // 5) Salva a consulta na tabela consultations (agora com pdf_url)
+      // 1) Salva a consulta na tabela consultations
       const { error: insertConsultError } = await supabase
         .from("consultations")
         .insert({
@@ -4040,7 +3994,6 @@ function RecordConsultationMock() {
           exames: exames.trim(),
           receitas: receitas.trim(),
           doctor_email: doctorEmail,
-          pdf_url: pdfUrl, // 👈 aqui entra o link do PDF (se deu certo)
         });
 
       if (insertConsultError) {
@@ -4048,34 +4001,59 @@ function RecordConsultationMock() {
         return;
       }
 
-      // 6) Registra crescimento se tiver peso/altura
-      if (
+      // 2) Se tiver peso, altura e/ou perímetro cefálico, grava também em growth_records
+      const weightTrim = weight.trim();
+      const heightTrim = height.trim();
+      const pcTrim = headCircumference.trim();
+
+      // aceita vírgula como decimal (ex: "8,5")
+      const w =
+        weightTrim.length > 0
+          ? Number(weightTrim.replace(",", "."))
+          : null;
+      const h =
+        heightTrim.length > 0
+          ? Number(heightTrim.replace(",", "."))
+          : null;
+      const pc =
+        pcTrim.length > 0
+          ? Number(pcTrim.replace(",", "."))
+          : null;
+
+      const temValorValido =
         (w !== null && !Number.isNaN(w)) ||
-        (h !== null && !Number.isNaN(h))
-      ) {
+        (h !== null && !Number.isNaN(h)) ||
+        (pc !== null && !Number.isNaN(pc));
+
+      if (temValorValido) {
         const { error: growthError } = await supabase
           .from("growth_records")
           .insert({
             child_id: child.id,
-            date: date,
-            weight_kg: w,
-            height_cm: h,
+            date: date, // mesma data da consulta
+            weight_kg: w !== null && !Number.isNaN(w) ? w : null,
+            height_cm: h !== null && !Number.isNaN(h) ? h : null,
+            head_circumference_cm:
+              pc !== null && !Number.isNaN(pc) ? pc : null,
           });
 
         if (growthError) {
           console.error(growthError);
+          // não trava o fluxo, só avisa
           alert(
-            "Consulta salva (com PDF), mas houve erro ao registrar peso/altura: " +
+            "Consulta salva, mas houve erro ao registrar peso/altura/PC: " +
               growthError.message
           );
+        } else {
+          console.log("Medidas de crescimento registradas com sucesso.");
         }
       }
 
       alert(
-        "Consulta salva no sistema! O PDF foi enviado para o Supabase e o link já aparece na aba Documentos / Consultas e no botão de WhatsApp."
+        "Consulta salva! Ela já aparece em Documentos → Consultas e, se você informou peso/altura/PC, também em Documentos → Crescimento."
       );
 
-      // Limpa campos
+      // Limpar campos principais
       setEvolucao("");
       setDoencas("");
       setConduta("");
@@ -4084,12 +4062,14 @@ function RecordConsultationMock() {
       setRetorno("");
       setWeight("");
       setHeight("");
+      setHeadCircumference("");
     } catch (e: any) {
       alert("Erro inesperado: " + (e?.message ?? "desconhecido"));
     } finally {
       setLoading(false);
     }
   }
+
 
 
   // 🔹 Gerar PDF da consulta com os dados preenchidos
@@ -4316,23 +4296,32 @@ function RecordConsultationMock() {
             />
           </div>
 
-          {/* 🔹 Campos de crescimento (peso/altura) nessa mesma tela */}
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {/* 🔹 Campos de crescimento (peso/altura/PC) nessa mesma tela */}
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
             <Input
               label="Peso (kg)"
               value={weight}
               onChange={setWeight}
               type="text"
-              placeholder='Ex: 8.5 ou 8,5'
+              placeholder="Ex: 8.5 ou 8,5"
             />
             <Input
               label="Altura (cm)"
               value={height}
               onChange={setHeight}
               type="text"
-              placeholder='Ex: 68 ou 68,5'
+              placeholder="Ex: 68 ou 68,5"
+            />
+            <Input
+              label="Perímetro cefálico (cm)"
+              value={headCircumference}
+              onChange={setHeadCircumference}
+              type="text"
+              placeholder="Ex: 44 ou 44,5"
             />
           </div>
+
+         
 
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button
