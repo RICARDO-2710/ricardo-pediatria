@@ -56,39 +56,6 @@ const WHO_DATA = {
   }
 };
 
-const REF_WEIGHT_CURVE = [
-  { ageMonths: 0, value: 3.3 },
-  { ageMonths: 1, value: 4.5 },
-  { ageMonths: 2, value: 5.6 },
-  { ageMonths: 3, value: 6.4 },
-  { ageMonths: 4, value: 7.0 },
-  { ageMonths: 5, value: 7.5 },
-  { ageMonths: 6, value: 7.9 },
-  { ageMonths: 9, value: 8.9 },
-  { ageMonths: 12, value: 9.6 },
-  { ageMonths: 18, value: 10.9 },
-  { ageMonths: 24, value: 12.2 },
-  { ageMonths: 36, value: 14.3 },
-  { ageMonths: 48, value: 16.3 },
-  { ageMonths: 60, value: 18.3 },
-];
-
-const REF_HEIGHT_CURVE = [
-  { ageMonths: 0, value: 49.9 },
-  { ageMonths: 1, value: 54.7 },
-  { ageMonths: 2, value: 58.4 },
-  { ageMonths: 3, value: 61.4 },
-  { ageMonths: 4, value: 63.9 },
-  { ageMonths: 5, value: 65.9 },
-  { ageMonths: 6, value: 67.6 },
-  { ageMonths: 9, value: 71.0 },
-  { ageMonths: 12, value: 74.0 },
-  { ageMonths: 18, value: 80.0 },
-  { ageMonths: 24, value: 86.0 },
-  { ageMonths: 36, value: 95.0 },
-  { ageMonths: 48, value: 102.0 },
-  { ageMonths: 60, value: 109.0 },
-];
 
 
 
@@ -2160,83 +2127,66 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
       heightCm: number | null;
     }>
   >([]);
+  const [growthChild, setGrowthChild] = useState<Child | null>(null);
   const [loadingGrowth, setLoadingGrowth] = useState(false);
   const [errorGrowth, setErrorGrowth] = useState<string | null>(null);
   const [growthChildName, setGrowthChildName] = useState<string>("");
 
-  function GrowthChart({ records, child }: { records: any[], child: Child }) {
-  const data = useMemo(() => {
-    // Ordenar registros por data
-    const sorted = [...records].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    
-    return sorted.map(r => {
-      const months = Math.floor((new Date(r.date).getTime() - new Date(child.birthDate).getTime()) / (1000 * 60 * 60 * 24 * 30.44));
-      
-      // Busca referência da OMS aproximada
-      const sexKey = child.sex === 'F' ? 'F' : 'M';
-      const refWeight = WHO_DATA.weight[sexKey][months as keyof typeof WHO_DATA.weight.M] || [null, null, null];
-      
+  // junta curva de referência + dados da criança
+  // retorna o valor estimado da OMS para um determinado percentil
+  function whoPercentile(
+    metric: "weight" | "height",
+    sexKey: "M" | "F",
+    age: number,
+    idx: 0 | 1 | 2
+  ): number | null {
+    // converter para um tipo indexável numericamente para evitar erros TS
+    const table = WHO_DATA[metric][sexKey] as Record<number, number[]>;
+    if (age in table) return table[age][idx];
+    const ages = Object.keys(table)
+      .map(Number)
+      .sort((a, b) => a - b);
+    const lower = ages.filter((a) => a < age).pop();
+    const higher = ages.find((a) => a > age);
+    if (lower != null && higher != null) {
+      const vLow = table[lower][idx];
+      const vHigh = table[higher][idx];
+      // interpolação linear
+      return vLow + ((vHigh - vLow) * (age - lower)) / (higher - lower);
+    }
+    if (lower != null) return table[lower][idx];
+    if (higher != null) return table[higher][idx];
+    return null;
+  }
+
+  const growthChartData = useMemo(() => {
+    if (!growthChild) return [];
+    const sexKey = growthChild.sex === "F" ? "F" : "M";
+
+    const refAges = Object.keys(WHO_DATA[growthMetric][sexKey]).map((n) =>
+      Number(n)
+    );
+    const childAges = growthData.map((g) => g.ageMonths);
+    const allAges = Array.from(new Set([...refAges, ...childAges])).sort(
+      (a, b) => a - b
+    );
+
+    return allAges.map((age) => {
+      const childRec = growthData.find((g) => g.ageMonths === age);
+      const childVal = childRec
+        ? growthMetric === "weight"
+          ? childRec.weightKg
+          : childRec.heightCm
+        : null;
       return {
-        name: months === 0 ? "Nascto" : `${months}m`,
-        peso: r.weight_kg,
-        p5: refWeight[0],
-        p50: refWeight[1],
-        p95: refWeight[2]
+        ageMonths: age,
+        child: childVal,
+        p5: whoPercentile(growthMetric, sexKey, age, 0),
+        p50: whoPercentile(growthMetric, sexKey, age, 1),
+        p95: whoPercentile(growthMetric, sexKey, age, 2),
       };
     });
-  }, [records, child]);
-
-  return (
-    <div className="h-[300px] w-full bg-white p-4 rounded-2xl border border-slate-100">
-      <ResponsiveContainer width="100%" height="100%">
-        <ReLineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-          <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} />
-          <YAxis fontSize={12} tickLine={false} axisLine={false} unit="kg" />
-          <Tooltip 
-            contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}
-          />
-          <Legend />
-          {/* Linhas da OMS (Percentis) */}
-          <Line type="monotone" dataKey="p5" stroke="#cbd5e1" strokeDasharray="5 5" dot={false} name="Percentil 5" />
-          <Line type="monotone" dataKey="p50" stroke="#94a3b8" strokeDasharray="5 5" dot={false} name="Média (p50)" />
-          <Line type="monotone" dataKey="p95" stroke="#cbd5e1" strokeDasharray="5 5" dot={false} name="Percentil 95" />
-          
-          {/* Linha Real da Criança */}
-          <Line 
-            type="monotone" 
-            dataKey="peso" 
-            stroke="#2563eb" 
-            strokeWidth={3} 
-            dot={{ r: 6, fill: '#2563eb' }} 
-            name="Peso Atual" 
-            activeDot={{ r: 8 }}
-          />
-        </ReLineChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-  // junta curva de referência + dados da criança
-  const growthChartData = useMemo(() => {
-    const refs = growthMetric === "weight" ? REF_WEIGHT_CURVE : REF_HEIGHT_CURVE;
-    if (!refs.length) return [];
-
-    const childByAge: Record<number, number> = {};
-    growthData.forEach((g) => {
-      const age = g.ageMonths;
-      const v = growthMetric === "weight" ? g.weightKg : g.heightCm;
-      if (v != null && !Number.isNaN(v)) {
-        childByAge[age] = v;
-      }
-    });
-
-    return refs.map((r) => ({
-      ageMonths: r.ageMonths,
-      ref: r.value,
-      child: childByAge[r.ageMonths] ?? null,
-    }));
-  }, [growthMetric, growthData]);
+  }, [growthMetric, growthData, growthChild]);
 
   const hasChildGrowthData = useMemo(
     () =>
@@ -2296,6 +2246,7 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
     setLoadingGrowth(true);
     setErrorGrowth(null);
     setGrowthChildName("");
+    setGrowthChild(null);
     setGrowthData([]);
 
     try{
@@ -2311,7 +2262,7 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
       // pega nome + nascimento do paciente
       const { data: childData, error: childError } = await supabase
         .from("children")
-        .select("name,birth_date")
+        .select("name,birth_date,sex")
         .eq("id", selectedChildId)
         .single();
 
@@ -2322,6 +2273,12 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
       const birthDate = new Date(birthDateStr);
 
       setGrowthChildName(childName);
+      setGrowthChild({
+        id: selectedChildId,
+        name: childName,
+        birthDate: birthDateStr,
+        sex: (childData as any).sex || "M",
+      });
 
       // medidas de crescimento
       const { data, error } = await supabase
@@ -2423,6 +2380,31 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subtab, user.email]);
+
+  // Ouve eventos de atualização (ex: quando uma consulta grava medidas)
+  useEffect(() => {
+    function handleGrowthUpdate(e: Event) {
+      try {
+        const ev: any = e as any;
+        const selectedChildId = localStorage.getItem(
+          `rbgp_selected_child_${user.email.toLowerCase()}`
+        );
+        if (!selectedChildId) return;
+        if (!ev?.detail) {
+          loadGrowthData();
+          return;
+        }
+        if (ev.detail.childId && ev.detail.childId === selectedChildId) {
+          loadGrowthData();
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    window.addEventListener("rbgp_growth_updated", handleGrowthUpdate as EventListener);
+    return () => window.removeEventListener("rbgp_growth_updated", handleGrowthUpdate as EventListener);
+  }, [user.email]);
 
   useEffect(() => {
     if (subtab === "pdf") {
@@ -2690,8 +2672,8 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
                   Crescimento
                 </div>
                 <div className="mt-1 text-sm text-slate-500">
-                  Curva de referência (aproximada) por idade em meses + dados registrados
-                  na tela <b>Gravar consulta</b>.
+                  Curva de referência da OMS (p5, p50, p95) por idade em meses —
+                  comparação com medidas lançadas na tela <b>Gravar consulta</b>.
                 </div>
                 {growthChildName && (
                   <div className="mt-1 text-xs text-slate-600">
@@ -2744,7 +2726,7 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis
                         dataKey="ageMonths"
-                        tickFormatter={(v) => `${v}m`}
+                        tickFormatter={(v) => (v === 0 ? "Nasc" : `${v}m`)}
                         label={{
                           value: "Idade (meses)",
                           position: "insideBottom",
@@ -2759,36 +2741,56 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
                         }}
                       />
                      
-                     <Tooltip
-  formatter={(value, name) => {
-    if (typeof value !== "number") {
-      return ["", ""];
-    }
-
-    const label =
-      name === "ref"
-        ? "Curva ref."
-        : growthChildName || "Paciente";
-
-    return [value, label];
-  }}
-  labelFormatter={(label) => `Idade: ${label} meses`}
-/>
-
+                      <Tooltip
+                        formatter={(value, name) => {
+                          if (typeof value !== "number") return ["", ""];
+                          let label = name;
+                          if (name === "p5" || name === "p95") label = `Percentil ${name === "p5" ? 5 : 95}`;
+                          if (name === "p50") label = "Média (p50)";
+                          if (name === "child") label = growthChildName || "Paciente";
+                          return [value, label];
+                        }}
+                        labelFormatter={(label) => {
+                          if (label === 0) return "Nascimento";
+                          return `Idade: ${label} meses`;
+                        }}
+                      />
 
                       <Legend />
+                      {/* linhas WHO */}
                       <Line
                         type="monotone"
-                        dataKey="ref"
-                        name="Curva ref."
-                        strokeWidth={2}
+                        dataKey="p5"
+                        stroke="#cbd5e1"
+                        strokeDasharray="5 5"
                         dot={false}
+                        name="Percentil 5"
                       />
                       <Line
                         type="monotone"
+                        dataKey="p50"
+                        stroke="#94a3b8"
+                        strokeDasharray="5 5"
+                        dot={false}
+                        name="Média (p50)"
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="p95"
+                        stroke="#cbd5e1"
+                        strokeDasharray="5 5"
+                        dot={false}
+                        name="Percentil 95"
+                      />
+                      {/* linha real da criança */}
+                      <Line
+                        type="monotone"
                         dataKey="child"
-                        name={growthChildName || "Paciente"}
+                        stroke="#2563eb"
                         strokeWidth={2}
+                        dot={{ r: 6, fill: '#2563eb' }}
+                        name={growthChildName || "Paciente"}
+                        activeDot={{ r: 8 }}
                       />
                     </ReLineChart>
                   </ResponsiveContainer>
@@ -2797,23 +2799,23 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
                 <div className="mt-3 text-xs text-slate-500 space-y-1">
                   {!hasChildGrowthData && (
                     <div>
-                      Ainda não há medidas de{" "}
-                      {growthMetric === "weight" ? "peso" : "altura"} registradas
+                      Ainda não há medidas de {growthMetric === "weight" ? "peso" : "altura"} registradas
                       para este paciente. A linha do paciente aparecerá assim que
                       você lançar peso/altura em <b>Gravar consulta</b>.
                     </div>
                   )}
                   <div>
-                    Linha <b>Curva ref.</b> = valores médios aproximados por idade em meses.
+                    As linhas pontilhadas representam os percentis 5, 50 e 95 da OMS
+                    para a idade. Os valores são buscados automaticamente com base no
+                    sexo e na idade (em meses) do paciente.
                   </div>
                   <div>
                     Linha <b>{growthChildName || "Paciente"}</b> = medidas lançadas
-                    na tabela <code>growth_records</code>.
+                    a partir das consultas (tabela <code>growth_records</code>).
                   </div>
                   <div>
-                    ⚠️ Uso apenas ilustrativo. Para decisão clínica, use as curvas
-                    oficiais (OMS, SBP, etc.) e ajuste os dados de referência conforme
-                    a sua preferência.
+                    ⚠️ Uso apenas ilustrativo. Para decisão clínica, consulte as curvas
+                    oficiais e adapte conforme sua rotina.
                   </div>
                 </div>
               </>
@@ -4498,7 +4500,21 @@ async function salvarConsulta() {
       throw new Error("Sessão expirada. Por favor, faça login novamente.");
     }
 
-    // 2. SALVA A CONSULTA (Incluindo os novos campos de biometria para o Banco)
+    // 2. GERAÇÃO DO PDF + UPLOAD primeiro (para não deixar registro no banco caso algo falhe)
+    const { blob: pdfBlob, fileName } = await gerarPdfConsultaBlob();
+    const filePath = `${child.id}/${fileName}`;
+
+    // tenta enviar substituindo caso já exista (upsert evita erro "resource already exists")
+    const { error: uploadError } = await supabase.storage
+      .from("child-docs")
+      .upload(filePath, pdfBlob, { contentType: "application/pdf", upsert: true });
+
+    if (uploadError) throw uploadError;
+
+    const { data: urlData } = supabase.storage.from("child-docs").getPublicUrl(filePath);
+    const pdfUrl = urlData.publicUrl;
+
+    // 3. SALVA A CONSULTA (Incluindo os novos campos de biometria para o Banco)
     const { data: consultRow, error: insertError } = await supabase
       .from("consultations")
       .insert({
@@ -4515,47 +4531,76 @@ async function salvarConsulta() {
         weight: weight ? String(weight) : null,
         height: height ? String(height) : null,
         head_circumference: headCircumference ? String(headCircumference) : null,
+        pdf_url: pdfUrl, // já temos o link
       })
       .select("id")
       .single();
 
     if (insertError) throw insertError;
 
-    // 3. SALVA NO HISTÓRICO DE CRESCIMENTO (Para os Gráficos)
+    // 4. SALVA NO HISTÓRICO DE CRESCIMENTO (Para os Gráficos)
     if (weight || height || headCircumference) {
-      await supabase.from("growth_records").insert({
+      // constrói payload de crescimento sem forçar coluna inexistente
+      const growthPayload: any = {
         child_id: child.id,
         date: date,
         weight_kg: weight ? Number(String(weight).replace(',', '.')) : null,
         height_cm: height ? Number(String(height).replace(',', '.')) : null,
-        head_cm: headCircumference ? Number(String(headCircumference).replace(',', '.')) : null,
-        doctor_email: doctorEmail
-      });
+      };
+      if (headCircumference) {
+        growthPayload.head_cm = Number(String(headCircumference).replace(',', '.'));
+      }
+      if (doctorEmail) {
+        growthPayload.doctor_email = doctorEmail;
+      }
+
+      let growthDataInserted: any = null;
+      let growthError: any = null;
+
+      ({ data: growthDataInserted, error: growthError } = await supabase
+        .from("growth_records")
+        .insert(growthPayload)
+        .select());
+
+      // se falhou por coluna inexistente, tenta novamente sem essa chave
+      if (growthError && /head_cm/i.test(growthError.message)) {
+        console.warn("head_cm não existe, removendo e reenviando");
+        delete growthPayload.head_cm;
+        ({ data: growthDataInserted, error: growthError } = await supabase
+          .from("growth_records")
+          .insert(growthPayload)
+          .select());
+      }
+
+      if (growthError) {
+        console.error("Erro ao salvar growth_records:", growthError);
+        // caso seja política de RLS, mostra mensagem mais clara
+        if (growthError.message && growthError.message.includes("row-level security")) {
+          alert(
+            "Não foi possível gravar as medidas porque a política de segurança do banco está bloqueando. " +
+              "No painel do Supabase você deve permitir inserts em 'growth_records' (por exemplo, criando uma policy `ALLOW INSERT FOR authenticated`)."
+          );
+          // não encerrar o processo geral da consulta, só informa
+          return;
+        }
+        throw growthError;
+      }
+
+      // avisa outras partes da aplicação (aba Crescimento) que houve atualização
+      try {
+        window.dispatchEvent(new CustomEvent("rbgp_growth_updated", { detail: { childId: child.id } }));
+      } catch (e) {
+        // noop
+      }
     }
 
-    // 4. GERAÇÃO DO PDF (Certifique-se que buildPdfForCurrentForm use os estados weight/height)
-    const pdfDoc = buildPdfForCurrentForm(child);
-    const pdfBlob = pdfDoc.output("blob");
-
-    const fileName = `consulta_${child.id}_${Date.now()}.pdf`;
-    const filePath = `${child.id}/${fileName}`;
-
-    // 5. UPLOAD STORAGE
-    const { error: uploadError } = await supabase.storage
-      .from("child-docs")
-      .upload(filePath, pdfBlob, { contentType: "application/pdf" });
-
-    if (uploadError) throw uploadError;
-
-    // 6. ATUALIZA URL NA CONSULTA
-    const { data: urlData } = supabase.storage.from("child-docs").getPublicUrl(filePath);
-    await supabase.from("consultations").update({ pdf_url: urlData.publicUrl }).eq("id", consultRow.id);
-
-    setSendPdfUrl(urlData.publicUrl);
+    // 5. prepara modal de envio
+    setSendPdfUrl(pdfUrl);
     setSendChildName(child.name);
     setSendBoxOpen(true);
-    
-    // 7. LIMPEZA COMPLETA DOS CAMPOS
+
+
+    // 6. LIMPEZA COMPLETA DOS CAMPOS
     setEvolucao(""); 
     setConduta(""); 
     setReceitas(""); 
@@ -4690,7 +4735,8 @@ async function salvarConsulta() {
   doc.text(DOCTOR_HEADER.doctorName, pageWidth / 2, 266, { align: "center" });
   doc.text(DOCTOR_HEADER.registration, pageWidth / 2, 272, { align: "center" });
 
-  const fileName = `consulta_${child.name.replace(/\s+/g, "_")}_${date}.pdf`;
+  // use id + timestamp for uniqueness (não somente a data)
+  const fileName = `consulta_${child.id}_${Date.now()}.pdf`;
   const blob = doc.output("blob");
 
   return { blob, fileName };
