@@ -583,6 +583,13 @@ function LoginModal({
     }
   }
 
+  // helpers for the fake plan system (simulação de assinaturas)
+  function getPlanStatusFor(email: string) {
+    return (
+      localStorage.getItem(`rbgp_plan_${email.toLowerCase()}`) ?? "Cancelado"
+    );
+  }
+
   async function handleSignIn() {
     setBusy(true);
     try {
@@ -592,10 +599,18 @@ function LoginModal({
         const allowed = DOCTOR_EMAILS.map((e) => e.toLowerCase());
         if (!allowed.includes(normalized)) {
           alert(
-             "Acesso à área do pediatra é restrito. Use o botão Portal para acesso como responsável."
+            "Acesso à área do pediatra é restrito. Use o botão Portal para acesso como responsável."
           );
           setBusy(false);
           return;
+        }
+
+        // verifica plano fictício (apenas para avisar, não bloqueia o login)
+        const planStatus = getPlanStatusFor(normalized);
+        if (planStatus !== "Ativo") {
+          alert(
+            "Conta validada mas não há um plano ativo. Você poderá entrar, porém não terá acesso às funcionalidades até ativar o plano em Configurações > Plano."
+          );
         }
       }
 
@@ -2204,33 +2219,47 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
 
   // --------- CONSULTAS (Supabase) ---------
   async function loadConsultations() {
+    // used in the *guardian* section (patient portal).
+    // the doctor area uses `loadConsultationsForChild` instead.
     setLoadingConsults(true);
     setErrorConsults(null);
     try {
+      // a criança selecionada pelo responsável é salva no localStorage
+      const selectedChildId = localStorage.getItem(
+        `rbgp_selected_child_${user.email.toLowerCase()}`
+      );
+
+      if (!selectedChildId) {
+        // nada a buscar se não tiver filho escolhido
+        setConsults([]);
+        setErrorConsults("Selecione um filho na aba 'Meus filhos' para ver as consultas.");
+        return;
+      }
+
       const { data, error } = await supabase
         .from("consultations")
-            .select(
-              "id, child_id, child_name, date, conduta, orientacoes, retorno, exames, receitas, pdf_url, weight, height, head_circumference"
-            )
+        .select(
+          "id, child_id, child_name, date, conduta, orientacoes, retorno, exames, receitas, pdf_url, weight, height, head_circumference"
+        )
+        .eq("child_id", selectedChildId) // filtrar pela criança
         .order("date", { ascending: false });
 
       if (error) throw error;
 
       const mapped: ConsultationSummary[] = (data ?? []).map((r: any) => ({
-  id: String(r.id),
-  dateISO: String(r.date),
-  childName: String(r.child_name),
-  conduta: String(r.conduta ?? ""),
-  orientacoes: String(r.orientacoes ?? ""),
-  retorno: String(r.retorno ?? ""),
-  exames: String(r.exames ?? ""),
-  receitas: String(r.receitas ?? ""),
-  pdfUrl: r.pdf_url ?? null,
-  weight: r.weight ?? undefined,
-  height: r.height ?? undefined,
-  headCircumference: r.head_circumference ?? undefined,
-}));
-
+        id: String(r.id),
+        dateISO: String(r.date),
+        childName: String(r.child_name),
+        conduta: String(r.conduta ?? ""),
+        orientacoes: String(r.orientacoes ?? ""),
+        retorno: String(r.retorno ?? ""),
+        exames: String(r.exames ?? ""),
+        receitas: String(r.receitas ?? ""),
+        pdfUrl: r.pdf_url ?? null,
+        weight: r.weight ?? undefined,
+        height: r.height ?? undefined,
+        headCircumference: r.head_circumference ?? undefined,
+      }));
 
       setConsults(mapped);
     } catch (e: any) {
@@ -2833,9 +2862,33 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
   // Adicionado "settings" no estado inicial
   const [tab, setTab] = useState<"patients" | "agenda" | "record" | "availability" | "settings">("patients");
 
+  // estado local para exibir banner de plano
+  const [planStatus, setPlanStatus] = useState<string>("Carregando");
+
+  useEffect(() => {
+    const read = () => {
+      const s =
+        localStorage.getItem(`rbgp_plan_${user.email.toLowerCase()}`) ?? "Cancelado";
+      setPlanStatus(s);
+      if (s !== "Ativo") {
+        // força abertura da aba de configurações para facilitar ativação
+        setTab("settings");
+      }
+    };
+    read();
+    window.addEventListener("rbgp_plan_updated", read);
+    return () => window.removeEventListener("rbgp_plan_updated", read);
+  }, [user.email]);
+
   return (
     <div className="grid gap-6">
       <Card>
+        {planStatus !== "Ativo" && planStatus !== "Carregando" && (
+          <div className="mb-4 rounded-xl bg-rose-100 p-3 text-sm text-rose-800">
+            Seu plano está <b>{planStatus.toLowerCase()}</b>. Vá em <b>Configurações / Plano</b> para ativar
+            ou renovar (modo de teste).
+          </div>
+        )}
         <CardHeader
           title={BRAND.name}
           subtitle="Área do Pediatra"
@@ -2852,25 +2905,49 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
           {/* Menu de Abas Atualizado */}
           <div className="flex flex-wrap items-center gap-2 border-b pb-4 mb-2">
             <button
-              onClick={() => setTab("patients")}
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("patients");
+              }}
               className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "patients" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
             >
               <Users className="inline h-4 w-4 mr-2" /> Pacientes
             </button>
             <button
-              onClick={() => setTab("agenda")}
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("agenda");
+              }}
               className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "agenda" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
             >
               <CalendarDays className="inline h-4 w-4 mr-2" /> Consultas
             </button>
             <button
-              onClick={() => setTab("record")}
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("record");
+              }}
               className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "record" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
             >
               <ClipboardList className="inline h-4 w-4 mr-2" /> Atender
             </button>
             <button
-              onClick={() => setTab("availability")}
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("availability");
+              }}
               className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "availability" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
             >
               <Clock className="inline h-4 w-4 mr-2" /> Disponibilidade
@@ -2899,16 +2976,47 @@ function DoctorSettings({ user }: { user: AppUser }) {
   const [planStatus, setPlanStatus] = useState("Ativo");
   const [loading, setLoading] = useState(false);
 
+  // acesso ao armazenamento local para simular o plano
+  function getStored() {
+    return (
+      localStorage.getItem(`rbgp_plan_${user.email.toLowerCase()}`) ?? "Cancelado"
+    );
+  }
+  function store(status: string) {
+    localStorage.setItem(`rbgp_plan_${user.email.toLowerCase()}`, status);
+  }
+
+  useEffect(() => {
+    setPlanStatus(getStored());
+  }, [user.email]);
+
   const handleCancelPlan = () => {
-    if (confirm("Deseja realmente cancelar sua assinatura Premium? Você manterá o acesso até o fim do ciclo atual.")) {
+    if (
+      confirm(
+        "Deseja realmente cancelar sua assinatura Premium? Você manterá o acesso até o fim do ciclo atual."
+      )
+    ) {
       setLoading(true);
       // Simulação de chamada de API para o Stripe/Gateway
       setTimeout(() => {
+        store("Cancelado");
         setPlanStatus("Cancelado");
         setLoading(false);
         alert("Renovação automática cancelada.");
+        window.dispatchEvent(new Event("rbgp_plan_updated"));
       }, 800);
     }
+  };
+
+  const handleActivatePlan = () => {
+    setLoading(true);
+    setTimeout(() => {
+      store("Ativo");
+      setPlanStatus("Ativo");
+      setLoading(false);
+      alert("Plano ativado com sucesso (modo de teste).");
+      window.dispatchEvent(new Event("rbgp_plan_updated"));
+    }, 500);
   };
 
   return (
@@ -2949,6 +3057,16 @@ function DoctorSettings({ user }: { user: AppUser }) {
             className="mt-6 flex items-center gap-2 text-xs text-rose-600 font-bold hover:text-rose-700 transition"
           >
             <XCircle size={14} /> {loading ? "Processando..." : "CANCELAR ASSINATURA"}
+        )
+        {planStatus !== "Ativo" && (
+          <button
+            onClick={handleActivatePlan}
+            disabled={loading}
+            className="mt-6 flex items-center gap-2 text-xs text-emerald-600 font-bold hover:text-emerald-700 transition"
+          >
+            {loading ? "Processando..." : "ATIVAR PLANO DE TESTE"}
+          </button>
+        )}
           </button>
         )}
       </Card>
@@ -3014,9 +3132,21 @@ async function loadChildren() {
   setLoading(true);
   setErr(null);
   try {
+    // filtra apenas os filhos vinculados ao médico logado
+    const { data: authData, error: authErr } = await supabase.auth.getUser();
+    const currentDoctorId = authData.user?.id;
+    if (!currentDoctorId) {
+      setErr("Sessão expirada. Faça login novamente.");
+      setChildren([]);
+      setSelectedChildId("");
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("children")
-      .select("id,name,birth_date,sex,guardian_email,guardian_phone")
+      .select("id,name,birth_date,sex,guardian_email,guardian_phone,doctor_id")
+      .eq("doctor_id", currentDoctorId)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
@@ -4261,6 +4391,13 @@ useEffect(() => {
       y += logoHeight + 4;
     }
 
+    // data de emissão / base, alinhada à direita
+    const emissionDate = formatDateBR(new Date().toISOString());
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Data: ${emissionDate}`, pageWidth - 10, y, { align: "right" });
+    y += 6;
+
     // --- CABEÇALHO DO CONSULTÓRIO ---
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
@@ -4721,9 +4858,7 @@ async function salvarConsulta() {
   bloco("Exames:", exames);
   bloco("Receitas:", receitas);
   bloco("Retorno:", retorno);
-  bloco("Peso:", weight);
-  bloco("Altura:", height);
-  bloco("Perímetro cefálico:", headCircumference);
+ 
 
   // Assinatura
   if (y > 230) { doc.addPage(); y = 200; }
@@ -5030,6 +5165,23 @@ export default function IndexPage() {
   function onLoggedIn(u: AppUser) {
     localStorage.setItem(`rbgp_role_${u.email.toLowerCase()}`, u.role);
     setAppUser(u);
+
+    // caso o médico esteja entrando e não tenha plano ativo,
+    // oferecemos ativar automaticamente para facilitar os testes.
+    if (u.role === "doctor") {
+      const planKey = `rbgp_plan_${u.email.toLowerCase()}`;
+      const current = localStorage.getItem(planKey) ?? "Cancelado";
+      if (current !== "Ativo") {
+        if (
+          confirm(
+            "Seu plano não está ativo. Deseja ativá‑lo automaticamente para teste?"
+          )
+        ) {
+          localStorage.setItem(planKey, "Ativo");
+          window.dispatchEvent(new Event("rbgp_plan_updated"));
+        }
+      }
+    }
   }
 
   return (
