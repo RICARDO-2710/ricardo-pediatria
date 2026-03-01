@@ -633,7 +633,7 @@ function LoginModal({
         alert(error.message);
         return;
       }
-      alert("Conta criada! Agora clique em Entrar.");
+      alert("Verifique seu e-mail para confirmar a conta. Depois disso, você já pode entrar.");
     } finally {
       setBusy(false);
     }
