@@ -42,7 +42,7 @@ import {
 } from "recharts";
 import jsPDF from "jspdf";
 
-import { supabase } from "../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
 const WHO_DATA = {
   height: {
