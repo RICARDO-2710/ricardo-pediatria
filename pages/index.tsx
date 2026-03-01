@@ -334,16 +334,41 @@ function handleSendWhatsAppConsult(
   window.open(whatsappUrl, "_blank");
 }
 
-function handleSendEmailConsult(pdfUrl: string, childName: string, toEmail?: string | null) {
+async function handleSendEmailConsult(pdfUrl: string, childName: string, toEmail?: string | null) {
   if (typeof window === "undefined") return;
+  const normalizedEmail = String(toEmail || "").trim();
 
-  const subject = `Consulta pediátrica - ${childName}`;
-  const body = `Olá!\n\nSegue o PDF da consulta de ${childName}:\n${pdfUrl}\n\nAtenciosamente,\n${DOCTOR_HEADER.doctorName}`;
-  const mailto = `mailto:${encodeURIComponent(toEmail ?? "")}?subject=${encodeURIComponent(
-    subject
-  )}&body=${encodeURIComponent(body)}`;
+  if (!normalizedEmail) {
+    alert("Preencha o e-mail do responsável.");
+    return;
+  }
 
-  window.location.href = mailto;
+  if (!pdfUrl) {
+    alert("PDF ainda não disponível.");
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/send-consult-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        toEmail: normalizedEmail,
+        childName,
+        pdfUrl,
+        doctorName: DOCTOR_HEADER.doctorName,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data?.error || "Não foi possível enviar o e-mail.");
+    }
+
+    alert("E-mail enviado com sucesso.");
+  } catch (error: any) {
+    alert(error?.message || "Não foi possível enviar o e-mail.");
+  }
 }
 
 
@@ -3244,7 +3269,7 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
                       )}
                       {c.receitas && (
                         <div>
-                          <b>Receitas:</b> {c.receitas}
+                          <b>Receituário:</b> {c.receitas}
                         </div>
                       )}
                     </div>
@@ -4189,7 +4214,7 @@ async function createPatient(data: any) {
                           )}
                           {c.receitas && (
                             <div>
-                              <b>Receitas:</b> {c.receitas}
+                              <b>Receituário:</b> {c.receitas}
                             </div>
                           )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -5245,7 +5270,7 @@ useEffect(() => {
     bloco("Evolução / Orientações gerais:", evolucao);
     bloco("Conduta:", conduta);
     bloco("Exames:", exames);
-    bloco("Receitas:", receitas);
+    bloco("Receituário:", receitas);
     bloco("Retorno:", retorno);
 
     // --- RODAPÉ / ASSINATURA ---
@@ -5349,7 +5374,7 @@ function buildPdfForCurrentForm(child: Child) {
   const secoes = [
     { titulo: "MOTIVO / EVOLUÇÃO", conteudo: evolucao },
     { titulo: "CONDUTA E ORIENTAÇÕES", conteudo: conduta },
-    { titulo: "PRESCRIÇÃO / RECEITAS", conteudo: receitas },
+    { titulo: "PRESCRIÇÃO / RECEITUÁRIO", conteudo: receitas },
   ];
 
   secoes.forEach((sec) => {
@@ -5627,7 +5652,7 @@ async function salvarConsulta() {
   bloco("Evolução / Orientações gerais:", evolucao);
   bloco("Conduta:", conduta);
   bloco("Exames:", exames);
-  bloco("Receitas:", receitas);
+  bloco("Receituário:", receitas);
   bloco("Retorno:", retorno);
  
 
@@ -5754,7 +5779,7 @@ async function salvarConsulta() {
               placeholder="Exames solicitados (se houver)"
             />
             <TextArea
-              label="Receitas"
+              label="Receituário"
               value={receitas}
               onChange={setReceitas}
               placeholder="Medicações e posologia"
@@ -5879,25 +5904,14 @@ async function salvarConsulta() {
       </Button>
 
       <Button
-        onClick={() => {
-          if (!sendEmail.trim()) return alert("Preencha o e-mail.");
-          if (!sendPdfUrl) return alert("PDF ainda não disponível.");
-
-          const subject = `Consulta - ${sendChildName}`;
-          const body = `Olá! Segue o PDF da consulta de ${sendChildName}: ${sendPdfUrl}`;
-
-          window.location.href =
-            `mailto:${encodeURIComponent(sendEmail)}` +
-            `?subject=${encodeURIComponent(subject)}` +
-            `&body=${encodeURIComponent(body)}`;
-        }}
+        onClick={() => handleSendEmailConsult(sendPdfUrl, sendChildName, sendEmail)}
       >
         Enviar por e-mail
       </Button>
     </div>
 
     <div className="text-xs text-slate-500">
-      WhatsApp/E-mail abrem um app/janela para confirmar o envio.
+      WhatsApp abre o app; e-mail é enviado automaticamente pelo sistema.
     </div>
   </div>
 </Modal>
