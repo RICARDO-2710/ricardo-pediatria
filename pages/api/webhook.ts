@@ -1,4 +1,4 @@
-import handler, { config } from "./stripe-webhook";
+import handler from "./stripe-webhook";
 
-export { config };
+export const config = { api: { bodyParser: false } };
 export default handler;
