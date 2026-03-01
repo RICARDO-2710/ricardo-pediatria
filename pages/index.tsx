@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/router";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   BarChart3,
   CalendarDays,
@@ -71,7 +71,7 @@ const WHO_DATA = {
  *    - Documentos / Informações ()
  *
  * ✅ Área do Pediatra:
- *    - Acesso restrito a e-mails da lista DOCTOR_EMAILS
+ *    - Acesso liberado para qualquer médico com plano ativo
  *    - Aba Pacientes: lista de crianças reais do Supabase
  *    - Aba Gravar consulta: formulário (ainda não salva no banco)
  */
@@ -92,6 +92,8 @@ type Child = {
   sex: "M" | "F" | "O";
   guardianEmail?: string | null;
   guardianPhone?: string | null;
+  pediatricianEmail?: string | null;
+  pediatricianName?: string | null;
 };
 
 
@@ -122,12 +124,64 @@ const BRAND = {
   accent: "#1d4ed8",
 };
 
-// 👇 SOMENTE estes e-mails podem acessar a Área do Pediatra
-const DOCTOR_EMAILS = [
-  "ricardobgurgel@gmail.com",
-  "marcela_maia@hotmail.com", // TROQUE pelo seu e-mail profissional
- // você pode adicionar mais aqui se quiser
-];
+type DoctorPdfSettings = {
+  doctorName: string;
+  specialty: string;
+  registration: string;
+  clinicName: string;
+  clinicAddress: string;
+  clinicPhone: string;
+  logoBase64: string;
+};
+
+function doctorPdfSettingsStorageKey(email: string) {
+  return `rbgp_doctor_pdf_settings_${email.trim().toLowerCase()}`;
+}
+
+function getBaseDoctorPdfSettings(): DoctorPdfSettings {
+  return {
+    doctorName: DOCTOR_HEADER.doctorName,
+    specialty: DOCTOR_HEADER.specialty,
+    registration: DOCTOR_HEADER.registration,
+    clinicName: DOCTOR_HEADER.clinicName,
+    clinicAddress: DOCTOR_HEADER.clinicAddress,
+    clinicPhone: DOCTOR_HEADER.clinicPhone,
+    logoBase64: LOGO_BASE64,
+  };
+}
+
+function getDoctorPdfSettings(email?: string | null): DoctorPdfSettings {
+  const base = getBaseDoctorPdfSettings();
+  if (!email || typeof window === "undefined") return base;
+
+  try {
+    const raw = localStorage.getItem(doctorPdfSettingsStorageKey(email));
+    if (!raw) return base;
+    const parsed = JSON.parse(raw) as Partial<DoctorPdfSettings>;
+    return {
+      ...base,
+      ...parsed,
+      doctorName: (parsed.doctorName ?? base.doctorName).trim(),
+      registration: (parsed.registration ?? base.registration).trim(),
+      clinicAddress: (parsed.clinicAddress ?? base.clinicAddress).trim(),
+      clinicPhone: (parsed.clinicPhone ?? base.clinicPhone).trim(),
+      logoBase64: (parsed.logoBase64 ?? base.logoBase64).trim(),
+    };
+  } catch {
+    return base;
+  }
+}
+
+function saveDoctorPdfSettings(email: string, settings: DoctorPdfSettings) {
+  if (!email || typeof window === "undefined") return;
+  localStorage.setItem(doctorPdfSettingsStorageKey(email), JSON.stringify(settings));
+}
+
+function getImageFormatFromBase64(dataUrl: string): "PNG" | "JPEG" {
+  const value = (dataUrl || "").toLowerCase();
+  if (value.startsWith("data:image/png")) return "PNG";
+  return "JPEG";
+}
 
 // ---------- Utils ----------
 
@@ -554,12 +608,14 @@ function LoginModal({
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [promoCode, setPromoCode] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setEmail("");
     setPassword("");
+    setPromoCode("");
     setBusy(false);
   }, [open]);
 
@@ -583,34 +639,67 @@ function LoginModal({
     }
   }
 
-  // helpers for the fake plan system (simulação de assinaturas)
-  function getPlanStatusFor(email: string) {
-    return (
-      localStorage.getItem(`rbgp_plan_${email.toLowerCase()}`) ?? "Cancelado"
-    );
+  async function getServerPlanStatus(emailToCheck: string) {
+    const res = await fetch("/api/plan-status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: emailToCheck.toLowerCase() }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error || "Falha ao verificar status do plano");
+    }
+
+    return data?.status ?? "Cancelado";
+  }
+
+  async function handleSubscribePlan() {
+    if (mode !== "doctor") return;
+
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) {
+      alert("Informe seu e-mail profissional para assinar o plano.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const res = await fetch("/api/checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normalized, promoCode: promoCode.trim() || undefined }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Falha ao iniciar assinatura");
+      }
+
+      alert("Checkout iniciado. Após confirmar o pagamento, o acesso da área do pediatra será liberado automaticamente.");
+      if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (err) {
+      console.error(err);
+      alert(`Erro ao assinar plano: ${err instanceof Error ? err.message : "erro desconhecido"}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleSignIn() {
     setBusy(true);
     try {
-      // Restrição: somente e-mails autorizados entram como pediatra
       if (mode === "doctor") {
         const normalized = email.trim().toLowerCase();
-        const allowed = DOCTOR_EMAILS.map((e) => e.toLowerCase());
-        if (!allowed.includes(normalized)) {
-          alert(
-            "Acesso à área do pediatra é restrito. Use o botão Portal para acesso como responsável."
-          );
-          setBusy(false);
-          return;
-        }
 
-        // verifica plano fictício (apenas para avisar, não bloqueia o login)
-        const planStatus = getPlanStatusFor(normalized);
+        const planStatus = await getServerPlanStatus(normalized);
         if (planStatus !== "Ativo") {
           alert(
-            "Conta validada mas não há um plano ativo. Você poderá entrar, porém não terá acesso às funcionalidades até ativar o plano em Configurações > Plano."
+            "Seu plano não está ativo. Clique em Assinar plano e conclua a assinatura para liberar o acesso."
           );
+          return;
         }
       }
 
@@ -645,10 +734,30 @@ function LoginModal({
           placeholder="mínimo 6 caracteres"
         />
 
+        {mode === "doctor" ? (
+          <Input
+            label="Cupom (opcional)"
+            value={promoCode}
+            onChange={setPromoCode}
+            
+          />
+        ) : null}
+
         <div className="grid gap-2">
-          <Button onClick={handleSignIn} disabled={busy || !email || password.length < 6}>
-            <LogIn className="h-4 w-4" /> Entrar
-          </Button>
+          {mode === "doctor" ? (
+            <div className="grid gap-2 md:grid-cols-2">
+              <Button onClick={handleSignIn} disabled={busy || !email || password.length < 6}>
+                <LogIn className="h-4 w-4" /> Entrar
+              </Button>
+              <Button variant="secondary" onClick={handleSubscribePlan} disabled={busy || !email}>
+                <CreditCard className="h-4 w-4" /> Assinar plano
+              </Button>
+            </div>
+          ) : (
+            <Button onClick={handleSignIn} disabled={busy || !email || password.length < 6}>
+              <LogIn className="h-4 w-4" /> Entrar
+            </Button>
+          )}
 
           {mode === "guardian" ? (
             <Button
@@ -784,11 +893,30 @@ function QuickAction({
 // ---------- Meus filhos (Supabase) ----------
 
 function MyChildren({ user, onBack }: { user: AppUser; onBack: () => void }) {
+  type DoctorOption = { email: string; name: string };
   const [children, setChildren] = useState<Child[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [openAdd, setOpenAdd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [doctors, setDoctors] = useState<DoctorOption[]>([]);
+
+  async function loadDoctors() {
+    try {
+      const res = await fetch("/api/doctors");
+      const data = await res.json();
+      const list = (data?.doctors ?? []) as DoctorOption[];
+      const sanitized = list
+        .filter((d) => d?.email)
+        .map((d) => ({
+          email: String(d.email).trim().toLowerCase(),
+          name: String(d.name || d.email).trim(),
+        }));
+      setDoctors(sanitized);
+    } catch {
+      setDoctors([]);
+    }
+  }
 
 async function loadChildren() {
   setLoading(true);
@@ -813,14 +941,26 @@ async function loadChildren() {
     const { data, error } = await supabase
       .from("children")
       .select(
-        "id,name,birth_date,sex,guardian_id,guardian_email,guardian_phone"
+        "id,name,birth_date,sex,guardian_id,guardian_email,guardian_phone,pediatrician_email,pediatrician_name"
       )
       .or(`guardian_id.eq.${uid},guardian_email.eq.${email}`)
       .order("created_at", { ascending: false });
 
-    if (error) throw error;
+    let rows: any[] = (data as any[]) ?? [];
+    let fetchError: any = error;
 
-    const rows = data ?? [];
+    if (fetchError && /pediatrician_email|pediatrician_name/i.test(fetchError.message || "")) {
+      const legacyQuery = await supabase
+        .from("children")
+        .select("id,name,birth_date,sex,guardian_id,guardian_email,guardian_phone")
+        .or(`guardian_id.eq.${uid},guardian_email.eq.${email}`)
+        .order("created_at", { ascending: false });
+
+      rows = legacyQuery.data ?? [];
+      fetchError = legacyQuery.error;
+    }
+
+    if (fetchError) throw fetchError;
 
     // 3) “Claim automático”:
     //    se o pediatra cadastrou com guardian_email igual ao do login,
@@ -848,13 +988,23 @@ async function loadChildren() {
         const { data: data2, error: error2 } = await supabase
           .from("children")
           .select(
-            "id,name,birth_date,sex,guardian_id,guardian_email,guardian_phone"
+            "id,name,birth_date,sex,guardian_id,guardian_email,guardian_phone,pediatrician_email,pediatrician_name"
           )
           .or(`guardian_id.eq.${uid},guardian_email.eq.${email}`)
           .order("created_at", { ascending: false });
 
         if (!error2) {
-          rows.splice(0, rows.length, ...(data2 ?? []));
+          rows.splice(0, rows.length, ...((data2 as any[]) ?? []));
+        } else if (/pediatrician_email|pediatrician_name/i.test((error2 as any)?.message || "")) {
+          const data2Legacy = await supabase
+            .from("children")
+            .select("id,name,birth_date,sex,guardian_id,guardian_email,guardian_phone")
+            .or(`guardian_id.eq.${uid},guardian_email.eq.${email}`)
+            .order("created_at", { ascending: false });
+
+          if (!data2Legacy.error) {
+            rows.splice(0, rows.length, ...(data2Legacy.data ?? []));
+          }
         }
       }
     }
@@ -867,6 +1017,8 @@ async function loadChildren() {
       sex: (r.sex as Child["sex"]) ?? "O",
       guardianEmail: (r.guardian_email as string) ?? null,
       guardianPhone: (r.guardian_phone as string) ?? null,
+      pediatricianEmail: (r.pediatrician_email as string) ?? null,
+      pediatricianName: (r.pediatrician_name as string) ?? null,
     }));
 
     setChildren(mapped);
@@ -901,6 +1053,7 @@ async function loadChildren() {
 
   useEffect(() => {
     loadChildren();
+    loadDoctors();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.email]);
 
@@ -915,10 +1068,12 @@ function AddChildModal({
   open,
   onClose,
   onAdd,
+  doctors,
 }: {
   open: boolean;
   onClose: () => void;
   onAdd: (c: Omit<Child, "id">) => void;
+  doctors: Array<{ email: string; name: string }>;
 }) {
   const [name, setName] = useState("");
   const [birthDate, setBirthDate] = useState("");
@@ -927,6 +1082,7 @@ function AddChildModal({
   // ✅ novos campos
   const [guardianEmail, setGuardianEmail] = useState("");
   const [guardianPhone, setGuardianPhone] = useState("");
+  const [pediatricianEmail, setPediatricianEmail] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -935,7 +1091,15 @@ function AddChildModal({
     setSex("M");
     setGuardianEmail("");
     setGuardianPhone("");
+    setPediatricianEmail(doctors[0]?.email ?? "");
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!pediatricianEmail && doctors[0]?.email) {
+      setPediatricianEmail(doctors[0].email);
+    }
+  }, [doctors, open, pediatricianEmail]);
 
   return (
     <Modal
@@ -984,6 +1148,23 @@ function AddChildModal({
           placeholder="(DDD) 99999-9999"
         />
 
+        {doctors.length === 0 ? (
+          <Input
+            label="E-mail do pediatra vinculado"
+            value={pediatricianEmail}
+            onChange={setPediatricianEmail}
+            type="email"
+            placeholder="pediatra@exemplo.com"
+          />
+        ) : (
+          <Select
+            label="Pediatra vinculado"
+            value={pediatricianEmail}
+            onChange={setPediatricianEmail}
+            options={doctors.map((d) => ({ label: d.name, value: d.email }))}
+          />
+        )}
+
         <div className="flex items-center justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
             Cancelar
@@ -994,6 +1175,10 @@ function AddChildModal({
               if (!birthDate) return alert("Informe a data de nascimento.");
               if (!guardianEmail.trim()) return alert("Informe o e-mail do responsável.");
               if (!guardianPhone.trim()) return alert("Informe o telefone do responsável.");
+              if (!pediatricianEmail.trim()) return alert("Selecione o pediatra vinculado.");
+
+              const selectedDoctor = doctors.find((d) => d.email === pediatricianEmail);
+              const manualDoctorName = pediatricianEmail.trim().split("@")[0] || pediatricianEmail.trim();
 
               onAdd({
                 name: name.trim(),
@@ -1001,6 +1186,8 @@ function AddChildModal({
                 sex,
                 guardianEmail: guardianEmail.trim(),
                 guardianPhone: guardianPhone.trim(),
+                pediatricianEmail: pediatricianEmail.trim().toLowerCase(),
+                pediatricianName: selectedDoctor?.name ?? manualDoctorName,
               });
               onClose();
             }}
@@ -1025,30 +1212,56 @@ function AddChildModal({
 
       const guardianId = auth.user?.id ?? null;
 
-      const { data, error } = await supabase
+      const basePayload = {
+        name: child.name,
+        birth_date: child.birthDate,
+        sex: child.sex,
+        guardian_id: guardianId,
+        guardian_email: child.guardianEmail,
+        guardian_phone: child.guardianPhone,
+        doctor_id: auth.user?.id,
+      };
+
+      const withPediatricianPayload = {
+        ...basePayload,
+        pediatrician_email: child.pediatricianEmail ?? null,
+        pediatrician_name: child.pediatricianName ?? null,
+      };
+
+      let insert = await supabase
         .from("children")
-        .insert({
-          name: child.name,
-          birth_date: child.birthDate,
-          sex: child.sex,
-          guardian_id: guardianId,
-          guardian_email: child.guardianEmail,
-          guardian_phone: child.guardianPhone,
-          doctor_id: auth.user?.id, // opcional: já amarra o pediatra que criou o cadastro
-        })
+        .insert(withPediatricianPayload)
         .select("id")
         .single();
 
-      if (error) throw error;
+      if (insert.error && /pediatrician_email|pediatrician_name/i.test(insert.error.message || "")) {
+        insert = await supabase
+          .from("children")
+          .insert(basePayload)
+          .select("id")
+          .single();
+      }
+
+      if (insert.error) throw insert.error;
 
       const newChild: Child = {
-        id: String(data.id),
+        id: String((insert.data as any).id),
         name: child.name,
         birthDate: child.birthDate,
         sex: child.sex,
         guardianEmail: child.guardianEmail,
         guardianPhone: child.guardianPhone,
+        pediatricianEmail: child.pediatricianEmail ?? null,
+        pediatricianName: child.pediatricianName ?? null,
       };
+
+      if (child.pediatricianEmail) {
+        const linkKey = `rbgp_child_doctor_link_${user.email.toLowerCase()}`;
+        const raw = localStorage.getItem(linkKey);
+        const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+        map[newChild.id] = child.pediatricianEmail;
+        localStorage.setItem(linkKey, JSON.stringify(map));
+      }
 
       setChildren((prev) => [newChild, ...prev]);
       setSelectedId(newChild.id);
@@ -1172,6 +1385,12 @@ function AddChildModal({
         Telefone do responsável: <b>{c.guardianPhone}</b>
       </div>
     )}
+
+    {c.pediatricianEmail && (
+      <div className="text-xs text-slate-500">
+        Pediatra vinculado: <b>{c.pediatricianName || c.pediatricianEmail}</b>
+      </div>
+    )}
   </button>
 ))}
 
@@ -1191,6 +1410,12 @@ function AddChildModal({
                     label={`Nascimento: ${formatDateBR(selected.birthDate)}`}
                   />
                   <Pill icon={<ShieldCheck className="h-4 w-4" />} label={`Sexo: ${selected.sex}`} />
+                  {selected.pediatricianEmail ? (
+                    <Pill
+                      icon={<Stethoscope className="h-4 w-4" />}
+                      label={`Pediatra: ${selected.pediatricianName || selected.pediatricianEmail}`}
+                    />
+                  ) : null}
                 </div>
 
                 <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
@@ -1217,6 +1442,7 @@ function AddChildModal({
         open={openAdd}
         onClose={() => setOpenAdd(false)}
         onAdd={addChild}
+        doctors={doctors}
       />
     </div>
   );
@@ -1326,8 +1552,11 @@ function AddChildModal({
 
 
 function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void }) {
+  type DoctorOption = { email: string; name: string };
   const RECIFE_OFFSET = "-03:00";
   const today = new Date();
+  const selectedChildStorageKey = `rbgp_selected_child_${user.email.toLowerCase()}`;
+  const childDoctorLinkStorageKey = `rbgp_child_doctor_link_${user.email.toLowerCase()}`;
 
   // Mês/ano exibidos no calendário
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -1335,19 +1564,34 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
 
   // Dia selecionado dentro do mês exibido
   const [selectedDay, setSelectedDay] = useState<number>(today.getDate());
+  const [doctors, setDoctors] = useState<DoctorOption[]>([]);
+  const [selectedDoctorEmail, setSelectedDoctorEmail] = useState("");
+  const [loadingDoctors, setLoadingDoctors] = useState(false);
+  const [linkedDoctorEmail, setLinkedDoctorEmail] = useState("");
+  const [linkedDoctorName, setLinkedDoctorName] = useState("");
 
   // pedidos do responsável (lista de baixo)
   const [myAppts, setMyAppts] = useState<
-    Array<{ id: string; start_at: string; status: string; child_id: string; childName: string }>
+    Array<{
+      id: string;
+      start_at: string;
+      status: string;
+      child_id: string;
+      childName: string;
+      doctorEmail?: string;
+      doctorName?: string;
+    }>
   >([]);
   const [loadingMyAppts, setLoadingMyAppts] = useState(false);
   const [errMyAppts, setErrMyAppts] = useState<string | null>(null);
 
   // disponibilidade real do dia (slot -> existe availability ativa?)
   const [dayAvail, setDayAvail] = useState<Record<string, boolean>>({});
+  const [daySlotDurationMin, setDaySlotDurationMin] = useState<Record<string, number>>({});
   // horários já ocupados (appointment requested/confirmed)
   const [dayBusy, setDayBusy] = useState<Record<string, boolean>>({});
   const [loadingSlots, setLoadingSlots] = useState(false);
+  const [errSlots, setErrSlots] = useState<string | null>(null);
 
   // disponibilidade por dia do mês (YYYY-MM-DD -> tem pelo menos 1 horário?)
   const [monthAvail, setMonthAvail] = useState<Record<string, boolean>>({});
@@ -1370,6 +1614,130 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
     const end = `${dateStr}T23:59:59${RECIFE_OFFSET}`;
     return { start, end };
   }
+
+  function doctorDisplayName(doctorEmail?: string, doctorName?: string) {
+    if (doctorName && doctorName.trim()) return doctorName.trim();
+    if (!doctorEmail) return "Pediatra não informado";
+    const found = doctors.find((d) => d.email === doctorEmail.toLowerCase());
+    if (found) return found.name;
+    return doctorEmail;
+  }
+
+  function displayNameFromEmail(email: string) {
+    const local = email.split("@")[0] || email;
+    return local
+      .split(/[._-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+
+  function getStoredChildDoctor(childId: string) {
+    try {
+      const raw = localStorage.getItem(childDoctorLinkStorageKey);
+      if (!raw) return "";
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      return String(parsed?.[childId] ?? "").trim().toLowerCase();
+    } catch {
+      return "";
+    }
+  }
+
+  async function loadLinkedDoctorFromSelectedChild() {
+    const childId = localStorage.getItem(selectedChildStorageKey) || "";
+    if (!childId) {
+      setLinkedDoctorEmail("");
+      setLinkedDoctorName("");
+      return;
+    }
+
+    try {
+      const query = await supabase
+        .from("children")
+        .select("pediatrician_email,pediatrician_name")
+        .eq("id", childId)
+        .maybeSingle();
+
+      if (!query.error) {
+        const email = String((query.data as any)?.pediatrician_email ?? "").trim().toLowerCase();
+        const name = String((query.data as any)?.pediatrician_name ?? "").trim();
+        if (email) {
+          setLinkedDoctorEmail(email);
+          setLinkedDoctorName(name || displayNameFromEmail(email));
+          setSelectedDoctorEmail(email);
+          return;
+        }
+      }
+
+      const legacyQuery = await supabase
+        .from("children")
+        .select("pediatrician_email")
+        .eq("id", childId)
+        .maybeSingle();
+
+      if (!legacyQuery.error) {
+        const legacyEmail = String((legacyQuery.data as any)?.pediatrician_email ?? "")
+          .trim()
+          .toLowerCase();
+        if (legacyEmail) {
+          setLinkedDoctorEmail(legacyEmail);
+          setLinkedDoctorName(displayNameFromEmail(legacyEmail));
+          setSelectedDoctorEmail(legacyEmail);
+          return;
+        }
+      }
+
+      const fromStorage = getStoredChildDoctor(childId);
+      if (fromStorage) {
+        setLinkedDoctorEmail(fromStorage);
+        setLinkedDoctorName(displayNameFromEmail(fromStorage));
+        setSelectedDoctorEmail(fromStorage);
+        return;
+      }
+
+      setLinkedDoctorEmail("");
+      setLinkedDoctorName("");
+    } catch {
+      const fromStorage = getStoredChildDoctor(childId);
+      if (fromStorage) {
+        setLinkedDoctorEmail(fromStorage);
+        setLinkedDoctorName(displayNameFromEmail(fromStorage));
+        setSelectedDoctorEmail(fromStorage);
+      } else {
+        setLinkedDoctorEmail("");
+        setLinkedDoctorName("");
+      }
+    }
+  }
+
+  async function loadDoctors() {
+    setLoadingDoctors(true);
+    try {
+      const res = await fetch("/api/doctors");
+      const data = await res.json();
+      const list = (data?.doctors ?? []) as DoctorOption[];
+
+      const sanitized = list
+        .filter((d) => d?.email)
+        .map((d) => ({
+          email: String(d.email).toLowerCase(),
+          name: String(d.name || d.email),
+        }));
+
+      setDoctors(sanitized);
+      setSelectedDoctorEmail((prev) => {
+        if (prev && sanitized.some((d) => d.email === prev)) return prev;
+        return sanitized[0]?.email ?? "";
+      });
+    } catch (e) {
+      console.error(e);
+      setDoctors([]);
+      setSelectedDoctorEmail("");
+    } finally {
+      setLoadingDoctors(false);
+    }
+  }
+
 
   // limite de 60 dias à frente
   const maxDateAllowed = useMemo(() => {
@@ -1424,17 +1792,18 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
     return res;
   }, [viewYear, viewMonth]);
 
-  // slots fixos 08h–17h
+  // slots do dia (dinâmicos pela disponibilidade do pediatra)
   const slots = useMemo(() => {
-    const res: string[] = [];
-    const start = 8;
-    const end = 17;
+    const dynamicSlots = Object.keys(dayAvail).filter((key) => /^\d{2}:\d{2}$/.test(key));
+    const baseSlots: string[] = [];
+    const start = 0;
+    const end = 24;
     for (let h = start; h < end; h++) {
-      res.push(`${pad2(h)}:00`);
-      res.push(`${pad2(h)}:30`);
+      baseSlots.push(`${pad2(h)}:00`);
+      baseSlots.push(`${pad2(h)}:30`);
     }
-    return res;
-  }, []);
+    return Array.from(new Set([...baseSlots, ...dynamicSlots])).sort();
+  }, [dayAvail]);
 
   function getSelectedDate() {
     return new Date(viewYear, viewMonth, selectedDay);
@@ -1466,11 +1835,24 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
     
 
 
-      const { data, error } = await supabase
+      const withDoctorColumns = await supabase
         .from("appointments")
-        .select("id, start_at, status, child_id")
+        .select("id, start_at, status, child_id, doctor_email, doctor_name")
         .eq("guardian_id", guardianId)
         .order("start_at", { ascending: true });
+
+      let data: any[] | null = withDoctorColumns.data as any[] | null;
+      let error: any = withDoctorColumns.error;
+
+      if (error && /doctor_email|doctor_name/i.test(error.message || "")) {
+        const legacy = await supabase
+          .from("appointments")
+          .select("id, start_at, status, child_id")
+          .eq("guardian_id", guardianId)
+          .order("start_at", { ascending: true });
+        data = legacy.data;
+        error = legacy.error;
+      }
 
       if (error) throw error;
 
@@ -1480,6 +1862,8 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
         status: String(a.status ?? "requested"),
         child_id: String(a.child_id ?? ""),
         childName: childMap.get(String(a.child_id)) ?? "Paciente",
+        doctorEmail: String(a.doctor_email ?? "") || undefined,
+        doctorName: String(a.doctor_name ?? "") || undefined,
       }));
 
       setMyAppts(mapped);
@@ -1514,18 +1898,35 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
       const startStr = `${ymd(startDate)}T00:00:00${RECIFE_OFFSET}`;
       const endStr = `${ymd(endDate)}T23:59:59${RECIFE_OFFSET}`;
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("doctor_availability")
         .select("start_at,is_active")
+        .eq("doctor_email", selectedDoctorEmail)
         .eq("is_active", true)
         .gte("start_at", startStr)
         .lte("start_at", endStr);
 
-      if (error) throw error;
+      const { data, error } = await query;
+
+      let availRows = data;
+      if (error) {
+        if ((error.message || "").toLowerCase().includes("doctor_email")) {
+          const legacy = await supabase
+            .from("doctor_availability")
+            .select("start_at,is_active")
+            .eq("is_active", true)
+            .gte("start_at", startStr)
+            .lte("start_at", endStr);
+          if (legacy.error) throw legacy.error;
+          availRows = legacy.data;
+        } else {
+          throw error;
+        }
+      }
 
       const map: Record<string, boolean> = {};
 
-      (data ?? []).forEach((a: any) => {
+      (availRows ?? []).forEach((a: any) => {
         // pega a data no fuso de Recife
         const dateKey = new Date(a.start_at).toLocaleDateString("en-CA", {
           timeZone: "America/Recife",
@@ -1547,40 +1948,88 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
 
   async function loadDayData(day: number, year = viewYear, month = viewMonth) {
     setLoadingSlots(true);
+    setErrSlots(null);
     try {
       const dateObj = new Date(year, month, day);
       const dateStr = ymd(dateObj);
       const { start, end } = dayBounds(dateStr);
 
-      const { data: availData, error: availError } = await supabase
+      let availQuery = supabase
         .from("doctor_availability")
-        .select("id,start_at,is_active")
+        .select("id,start_at,end_at,is_active,duration_minutes")
+        .eq("doctor_email", selectedDoctorEmail)
         .eq("is_active", true)
         .gte("start_at", start)
         .lte("start_at", end);
 
-      if (availError) throw availError;
+      const { data: availData, error: availError } = await availQuery;
+
+      let dayAvailRows: any[] | null = availData as any[] | null;
+      if (availError) {
+        if (
+          (availError.message || "").toLowerCase().includes("doctor_email") ||
+          (availError.message || "").toLowerCase().includes("duration_minutes")
+        ) {
+          const legacy = await supabase
+            .from("doctor_availability")
+            .select("id,start_at,end_at,is_active")
+            .eq("is_active", true)
+            .gte("start_at", start)
+            .lte("start_at", end);
+          if (legacy.error) throw legacy.error;
+          dayAvailRows = legacy.data;
+        } else {
+          throw availError;
+        }
+      }
 
       const availMap: Record<string, boolean> = {};
-      (availData ?? []).forEach((a: any) => {
-        const d = new Date(a.start_at);
+      const durationMap: Record<string, number> = {};
+      (dayAvailRows ?? []).forEach((a: any) => {
+        const startDate = new Date(a.start_at);
+        const endDate = a.end_at ? new Date(a.end_at) : null;
+        const diffMinutes =
+          endDate && !Number.isNaN(endDate.getTime())
+            ? Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000))
+            : 0;
+        const resolvedDuration = Number(a.duration_minutes ?? 0) || diffMinutes || 30;
+
+        const d = startDate;
         const hh = pad2(d.getHours());
         const mm = pad2(d.getMinutes());
         const key = `${hh}:${mm}`;
         availMap[key] = true;
+        durationMap[key] = resolvedDuration;
       });
 
-      const { data: apptsData, error: apptsError } = await supabase
+      let apptsQuery = supabase
         .from("appointments")
         .select("start_at,status")
+        .eq("doctor_email", selectedDoctorEmail)
         .in("status", ["requested", "confirmed"])
         .gte("start_at", start)
         .lte("start_at", end);
 
-      if (apptsError) throw apptsError;
+      const { data: apptsData, error: apptsError } = await apptsQuery;
+
+      let apptRows = apptsData;
+      if (apptsError) {
+        if ((apptsError.message || "").toLowerCase().includes("doctor_email")) {
+          const legacy = await supabase
+            .from("appointments")
+            .select("start_at,status")
+            .in("status", ["requested", "confirmed"])
+            .gte("start_at", start)
+            .lte("start_at", end);
+          if (legacy.error) throw legacy.error;
+          apptRows = legacy.data;
+        } else {
+          throw apptsError;
+        }
+      }
 
       const busyMap: Record<string, boolean> = {};
-      (apptsData ?? []).forEach((a: any) => {
+      (apptRows ?? []).forEach((a: any) => {
         const d = new Date(a.start_at);
         const hh = pad2(d.getHours());
         const mm = pad2(d.getMinutes());
@@ -1589,10 +2038,13 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
       });
 
       setDayAvail(availMap);
+      setDaySlotDurationMin(durationMap);
       setDayBusy(busyMap);
     } catch (e: any) {
       console.error(e);
+      setErrSlots(e?.message ?? "Falha ao carregar horários deste dia.");
       setDayAvail({});
+      setDaySlotDurationMin({});
       setDayBusy({});
     } finally {
       setLoadingSlots(false);
@@ -1601,26 +2053,52 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
 
   // carrega pedidos do responsável
   useEffect(() => {
+    loadDoctors();
+    loadLinkedDoctorFromSelectedChild();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!linkedDoctorEmail) return;
+    setSelectedDoctorEmail(linkedDoctorEmail);
+  }, [linkedDoctorEmail]);
+
+  useEffect(() => {
     loadMyAppointments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // sempre que mudar o mês/ano, recarrega mapa de disponibilidade de dias
   useEffect(() => {
+    if (!selectedDoctorEmail) {
+      setMonthAvail({});
+      return;
+    }
     loadMonthAvailability(viewYear, viewMonth);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewYear, viewMonth]);
+  }, [viewYear, viewMonth, selectedDoctorEmail]);
 
   // sempre que mudar o dia/mês/ano, recarrega slots daquele dia
   useEffect(() => {
+    if (!selectedDoctorEmail) {
+      setDayAvail({});
+      setDayBusy({});
+      setErrSlots("Selecione o pediatra para visualizar os horários.");
+      return;
+    }
     loadDayData(selectedDay, viewYear, viewMonth);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDay, viewYear, viewMonth]);
+  }, [selectedDay, viewYear, viewMonth, selectedDoctorEmail]);
 
   // --- MARCAR CONSULTA ---
 
   async function handleRequest(slot: string) {
     try {
+      if (!selectedDoctorEmail) {
+        alert("Selecione o pediatra antes de marcar a consulta.");
+        return;
+      }
+
       const { data: authData, error: authError } = await supabase.auth.getUser();
       if (authError) throw authError;
 
@@ -1669,18 +2147,33 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
       const [hh, mm] = slot.split(":").map((v) => Number(v));
 
       const start_at = recifeISO(dateStr, hh, mm);
-      const endMinutes = hh * 60 + mm + 30;
+      const slotDuration = Number(daySlotDurationMin[slot] ?? 30);
+      const endMinutes = hh * 60 + mm + slotDuration;
       const endH = Math.floor(endMinutes / 60);
       const endM = endMinutes % 60;
       const end_at = recifeISO(dateStr, endH, endM);
 
-      const { error: insertError } = await supabase.from("appointments").insert({
+      const selectedDoctor = doctors.find((d) => d.email === selectedDoctorEmail);
+      const basePayload = {
         guardian_id: guardianId,
         child_id: selectedChildId,
         start_at,
         end_at,
         status: "requested",
-      });
+      };
+
+      const withDoctorPayload = {
+        ...basePayload,
+        doctor_email: selectedDoctorEmail,
+        doctor_name: selectedDoctor?.name ?? null,
+      };
+
+      let { error: insertError } = await supabase.from("appointments").insert(withDoctorPayload);
+
+      if (insertError && /doctor_email|doctor_name/i.test(insertError.message || "")) {
+        const fallbackInsert = await supabase.from("appointments").insert(basePayload);
+        insertError = fallbackInsert.error;
+      }
 
       if (insertError) {
         console.error(insertError);
@@ -1688,7 +2181,9 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
         return;
       }
 
-      alert("Pedido de consulta registrado! Aguardando confirmação do pediatra.");
+      alert(
+        `Pedido de consulta registrado com ${selectedDoctor?.name ?? selectedDoctorEmail}! Aguardando confirmação do pediatra.`
+      );
       await loadMyAppointments();
       await loadDayData(selectedDay, viewYear, viewMonth);
       await loadMonthAvailability(viewYear, viewMonth);
@@ -1728,7 +2223,7 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
             Marcar consulta
           </div>
           <div className="mt-1 text-sm text-slate-500">
-            Duração fixa: 30 minutos. Só é possível marcar até 60 dias à frente.
+            Duração definida pelo pediatra na agenda. Só é possível marcar até 60 dias à frente.
           </div>
         </div>
         <Button variant="secondary" onClick={onBack}>
@@ -1737,6 +2232,44 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
+        <Card className="md:col-span-2">
+          <div className="p-4">
+            {loadingDoctors ? (
+              <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
+                Carregando lista de pediatras...
+              </div>
+            ) : doctors.length === 0 && !linkedDoctorEmail ? (
+              <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
+                Nenhum pediatra ativo encontrado no momento.
+              </div>
+            ) : (
+              <Select
+                label="Pediatra"
+                value={selectedDoctorEmail}
+                onChange={setSelectedDoctorEmail}
+                options={[
+                  ...(linkedDoctorEmail
+                    ? [
+                        {
+                          label: `${linkedDoctorName || displayNameFromEmail(linkedDoctorEmail)} (vinculado ao paciente)`,
+                          value: linkedDoctorEmail,
+                        },
+                      ]
+                    : []),
+                  ...doctors
+                    .filter((d) => d.email !== linkedDoctorEmail)
+                    .map((d) => ({ label: d.name, value: d.email })),
+                ]}
+              />
+            )}
+            {linkedDoctorEmail ? (
+              <div className="mt-2 rounded-xl bg-emerald-50 p-3 text-xs text-emerald-800 ring-1 ring-emerald-200">
+                Paciente liberado com: <b>{linkedDoctorName || linkedDoctorEmail}</b>
+              </div>
+            ) : null}
+          </div>
+        </Card>
+
         {/* Calendário */}
         <Card>
           <div className="p-4">
@@ -1829,7 +2362,7 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
           <div className="p-4">
             <div className="flex items-center justify-between">
               <div className="text-xs font-semibold text-slate-700">
-                Horários (30 min)
+                Horários
               </div>
               <Pill
                 icon={<Clock className="h-4 w-4" />}
@@ -1840,6 +2373,10 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
             {loadingSlots ? (
               <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
                 Carregando disponibilidade...
+              </div>
+            ) : errSlots ? (
+              <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
+                {errSlots}
               </div>
             ) : (
               <div className="mt-3 grid grid-cols-2 gap-2">
@@ -1920,6 +2457,9 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
                       <div className="mt-0.5 text-xs text-slate-500">
                         {formatDateTimeRecife(a.start_at)}
                       </div>
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        Pediatra: {doctorDisplayName(a.doctorEmail, a.doctorName)}
+                      </div>
                     </div>
 
                     <span
@@ -1959,7 +2499,14 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
 
 function AppointmentStatus({ user, onBack }: { user: AppUser; onBack: () => void }) {
   const [items, setItems] = useState<
-    Array<{ id: string; start_at: string; status: string; childName: string }>
+    Array<{
+      id: string;
+      start_at: string;
+      status: string;
+      childName: string;
+      doctorEmail?: string;
+      doctorName?: string;
+    }>
   >([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -2001,11 +2548,24 @@ function AppointmentStatus({ user, onBack }: { user: AppUser; onBack: () => void
         childMap.set(String(c.id), String(c.name));
       });
 
-      const { data, error } = await supabase
+      const withDoctorColumns = await supabase
         .from("appointments")
-        .select("id, start_at, status, child_id")
+        .select("id, start_at, status, child_id, doctor_email, doctor_name")
         .eq("guardian_id", guardianId)
         .order("start_at", { ascending: false });
+
+      let data: any[] | null = withDoctorColumns.data as any[] | null;
+      let error: any = withDoctorColumns.error;
+
+      if (error && /doctor_email|doctor_name/i.test(error.message || "")) {
+        const legacy = await supabase
+          .from("appointments")
+          .select("id, start_at, status, child_id")
+          .eq("guardian_id", guardianId)
+          .order("start_at", { ascending: false });
+        data = legacy.data;
+        error = legacy.error;
+      }
 
       if (error) throw error;
 
@@ -2015,6 +2575,8 @@ function AppointmentStatus({ user, onBack }: { user: AppUser; onBack: () => void
         status: String(a.status ?? "requested"),
         child_id: String(a.child_id ?? ""),
         childName: childMap.get(String(a.child_id)) ?? "Paciente",
+        doctorEmail: String(a.doctor_email ?? "") || undefined,
+        doctorName: String(a.doctor_name ?? "") || undefined,
       }));
 
       setItems(mapped);
@@ -2072,6 +2634,9 @@ function AppointmentStatus({ user, onBack }: { user: AppUser; onBack: () => void
                       <div className="text-sm font-semibold text-slate-900">{a.childName}</div>
                       <div className="mt-0.5 text-xs text-slate-500">
                         {formatDateTimeRecife(a.start_at)}
+                      </div>
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        Pediatra: {a.doctorName || a.doctorEmail || ""}
                       </div>
                     </div>
 
@@ -2866,18 +3431,27 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
   const [planStatus, setPlanStatus] = useState<string>("Carregando");
 
   useEffect(() => {
-    const read = () => {
-      const s =
-        localStorage.getItem(`rbgp_plan_${user.email.toLowerCase()}`) ?? "Cancelado";
-      setPlanStatus(s);
-      if (s !== "Ativo") {
-        // força abertura da aba de configurações para facilitar ativação
-        setTab("settings");
+    async function load() {
+      try {
+        const res = await fetch("/api/plan-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: user.email }),
+        });
+        const data = await res.json();
+        const s: string = data.status ?? "Cancelado";
+        setPlanStatus(s);
+        if (s !== "Ativo") {
+          setTab("settings");
+        }
+      } catch (err) {
+        console.error("failed to load plan status", err);
+        setPlanStatus("Cancelado");
       }
-    };
-    read();
-    window.addEventListener("rbgp_plan_updated", read);
-    return () => window.removeEventListener("rbgp_plan_updated", read);
+    }
+    load();
+    window.addEventListener("rbgp_plan_updated", load);
+    return () => window.removeEventListener("rbgp_plan_updated", load);
   }, [user.email]);
 
   return (
@@ -2965,7 +3539,7 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
           {tab === "patients" && <DoctorPatients />}
           {tab === "agenda" && <DoctorAppointments />}
           {tab === "availability" && <DoctorAvailability />}
-          {tab === "record" && <RecordConsultationMock />}
+          {tab === "record" && <RecordConsultationMock doctorEmail={user.email} />}
           {tab === "settings" && <DoctorSettings user={user} />}
         </div>
       </Card>
@@ -2973,50 +3547,104 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
   );
 }
 function DoctorSettings({ user }: { user: AppUser }) {
-  const [planStatus, setPlanStatus] = useState("Ativo");
+  const [planStatus, setPlanStatus] = useState("Carregando");
   const [loading, setLoading] = useState(false);
+  const [pdfDoctorName, setPdfDoctorName] = useState("");
+  const [pdfRegistration, setPdfRegistration] = useState("");
+  const [pdfClinicAddress, setPdfClinicAddress] = useState("");
+  const [pdfClinicPhone, setPdfClinicPhone] = useState("");
+  const [pdfLogoBase64, setPdfLogoBase64] = useState("");
 
-  // acesso ao armazenamento local para simular o plano
-  function getStored() {
-    return (
-      localStorage.getItem(`rbgp_plan_${user.email.toLowerCase()}`) ?? "Cancelado"
-    );
-  }
-  function store(status: string) {
-    localStorage.setItem(`rbgp_plan_${user.email.toLowerCase()}`, status);
-  }
-
+  // busca estado real do plano no servidor
   useEffect(() => {
-    setPlanStatus(getStored());
+    async function load() {
+      try {
+        const res = await fetch("/api/plan-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: user.email }),
+        });
+        const data = await res.json();
+        setPlanStatus(data.status ?? "Cancelado");
+      } catch (err) {
+        console.error("failed to load plan status", err);
+        setPlanStatus("Cancelado");
+      }
+    }
+    load();
   }, [user.email]);
 
-  const handleCancelPlan = () => {
-    if (
-      confirm(
-        "Deseja realmente cancelar sua assinatura Premium? Você manterá o acesso até o fim do ciclo atual."
-      )
-    ) {
-      setLoading(true);
-      // Simulação de chamada de API para o Stripe/Gateway
-      setTimeout(() => {
-        store("Cancelado");
-        setPlanStatus("Cancelado");
-        setLoading(false);
-        alert("Renovação automática cancelada.");
-        window.dispatchEvent(new Event("rbgp_plan_updated"));
-      }, 800);
+  useEffect(() => {
+    const settings = getDoctorPdfSettings(user.email);
+    setPdfDoctorName(settings.doctorName);
+    setPdfRegistration(settings.registration);
+    setPdfClinicAddress(settings.clinicAddress);
+    setPdfClinicPhone(settings.clinicPhone);
+    setPdfLogoBase64(settings.logoBase64);
+  }, [user.email]);
+
+  const handleSavePdfSettings = () => {
+    const base = getDoctorPdfSettings(user.email);
+    saveDoctorPdfSettings(user.email, {
+      ...base,
+      doctorName: pdfDoctorName.trim(),
+      registration: pdfRegistration.trim(),
+      clinicAddress: pdfClinicAddress.trim(),
+      clinicPhone: pdfClinicPhone.trim(),
+      logoBase64: pdfLogoBase64.trim(),
+    });
+    alert("Personalização do PDF salva com sucesso.");
+  };
+
+  const handleCancelPlan = async () => {
+    if (!confirm("Deseja realmente cancelar sua assinatura Premium?")) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/cancel-subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscriptionId: (user as any).subscriptionId, email: user.email }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Falha ao cancelar assinatura");
+      }
+
+      setPlanStatus("Cancelado");
+      alert("Renovação automática cancelada.");
+      window.dispatchEvent(new Event("rbgp_plan_updated"));
+    } catch (err) {
+      console.error(err);
+      alert(`Falha ao cancelar: ${err instanceof Error ? err.message : "erro desconhecido"}`);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleActivatePlan = () => {
+  const handleActivatePlan = async () => {
     setLoading(true);
-    setTimeout(() => {
-      store("Ativo");
-      setPlanStatus("Ativo");
+    try {
+      const res = await fetch("/api/checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Falha ao iniciar checkout");
+      }
+
+      const { url } = data;
+      setPlanStatus("Carregando");
+      window.location.href = url;
+    } catch (err) {
+      console.error(err);
+      alert(`Erro ao iniciar checkout: ${err instanceof Error ? err.message : "erro desconhecido"}`);
+    } finally {
       setLoading(false);
-      alert("Plano ativado com sucesso (modo de teste).");
-      window.dispatchEvent(new Event("rbgp_plan_updated"));
-    }, 500);
+    }
   };
 
   return (
@@ -3057,16 +3685,15 @@ function DoctorSettings({ user }: { user: AppUser }) {
             className="mt-6 flex items-center gap-2 text-xs text-rose-600 font-bold hover:text-rose-700 transition"
           >
             <XCircle size={14} /> {loading ? "Processando..." : "CANCELAR ASSINATURA"}
-        )
+          </button>
+        )}
         {planStatus !== "Ativo" && (
           <button
             onClick={handleActivatePlan}
             disabled={loading}
             className="mt-6 flex items-center gap-2 text-xs text-emerald-600 font-bold hover:text-emerald-700 transition"
           >
-            {loading ? "Processando..." : "ATIVAR PLANO DE TESTE"}
-          </button>
-        )}
+            {loading ? "Processando..." : "ATIVAR PLANO"}
           </button>
         )}
       </Card>
@@ -3086,19 +3713,39 @@ function DoctorSettings({ user }: { user: AppUser }) {
         <div className="space-y-4">
           <Input 
             label="Nome exibido no PDF" 
-            value={DOCTOR_HEADER.doctorName} 
-            onChange={() => {}} 
+            value={pdfDoctorName}
+            onChange={setPdfDoctorName}
           />
           <Input 
             label="Registro (CRM/RQE)" 
-            value={DOCTOR_HEADER.registration} 
-            onChange={() => {}} 
+            value={pdfRegistration}
+            onChange={setPdfRegistration}
+          />
+          <Input
+            label="Telefone"
+            value={pdfClinicPhone}
+            onChange={setPdfClinicPhone}
+          />
+          <TextArea
+            label="Endereço"
+            value={pdfClinicAddress}
+            onChange={setPdfClinicAddress}
+            placeholder="Endereço exibido no cabeçalho do PDF"
+          />
+          <TextArea
+            label="Logo em Base64"
+            value={pdfLogoBase64}
+            onChange={setPdfLogoBase64}
+            placeholder="Cole aqui no formato data:image/png;base64,..."
           />
           <div className="p-3 bg-slate-50 rounded-xl border border-dashed border-slate-200">
             <p className="text-[11px] text-slate-500 leading-relaxed">
-              <strong>Nota:</strong> O Logotipo é extraído automaticamente do seu perfil profissional. Para alterar a imagem, vá em "Meus Dados".
+              <strong>Nota:</strong> Salvo por e-mail do médico. PNG e JPEG em data URL funcionam (ex.: data:image/png;base64,...).
             </p>
           </div>
+          <Button onClick={handleSavePdfSettings}>
+            Salvar personalização do PDF
+          </Button>
         </div>
       </Card>
     </div>
@@ -3773,6 +4420,7 @@ function DoctorAvailability() {
     start_at: string;
     end_at: string;
     is_active: boolean;
+    duration_minutes?: number;
   };
 
   const RECIFE_OFFSET = "-03:00";
@@ -3781,6 +4429,8 @@ function DoctorAvailability() {
   const [selectedDate, setSelectedDate] = useState<string>(
     today.toISOString().slice(0, 10)
   );
+  const [doctorEmail, setDoctorEmail] = useState<string>("");
+  const [slotDurationMin, setSlotDurationMin] = useState<string>("30");
   const [items, setItems] = useState<AvailabilityItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -3789,17 +4439,25 @@ function DoctorAvailability() {
     return String(n).padStart(2, "0");
   }
 
-  // slots de 30 em 30 min, 08h–17h
+  // slots dinâmicos conforme duração escolhida (dia inteiro)
   const slots: string[] = useMemo(() => {
-    const res: string[] = [];
-    const start = 8;
-    const end = 17;
-    for (let h = start; h < end; h++) {
-      res.push(`${pad2(h)}:00`);
-      res.push(`${pad2(h)}:30`);
+    const generated: string[] = [];
+    const step = Math.max(5, Number(slotDurationMin) || 30);
+    const start = 0;
+    const end = 24;
+    for (let minutes = start * 60; minutes < end * 60; minutes += step) {
+      const h = Math.floor(minutes / 60);
+      const m = minutes % 60;
+      generated.push(`${pad2(h)}:${pad2(m)}`);
     }
-    return res;
-  }, []);
+
+    const existing = items.map((a) => {
+      const d = new Date(a.start_at);
+      return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    });
+
+    return Array.from(new Set([...generated, ...existing])).sort();
+  }, [slotDurationMin, items]);
 
   function dayBounds(dateStr: string) {
     const start = `${dateStr}T00:00:00${RECIFE_OFFSET}`;
@@ -3807,8 +4465,19 @@ function DoctorAvailability() {
     return { start, end };
   }
 
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getUser().then(({ data }) => {
+      if (!mounted) return;
+      setDoctorEmail((data.user?.email || "").toLowerCase());
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   async function load() {
-    if (!selectedDate) return;
+    if (!selectedDate || !doctorEmail) return;
     setLoading(true);
     setErr(null);
     try {
@@ -3816,20 +4485,49 @@ function DoctorAvailability() {
 
       const { data, error } = await supabase
         .from("doctor_availability")
-        .select("id,start_at,end_at,is_active")
+        .select("id,start_at,end_at,is_active,duration_minutes")
         .eq("is_active", true)
+        .eq("doctor_email", doctorEmail)
         .gte("start_at", start)
         .lte("start_at", end)
         .order("start_at", { ascending: true });
 
-      if (error) throw error;
+      let rows: any[] | null = data as any[] | null;
+      if (error) {
+        if (
+          (error.message || "").toLowerCase().includes("doctor_email") ||
+          (error.message || "").toLowerCase().includes("duration_minutes")
+        ) {
+          const legacy = await supabase
+            .from("doctor_availability")
+            .select("id,start_at,end_at,is_active")
+            .eq("is_active", true)
+            .gte("start_at", start)
+            .lte("start_at", end)
+            .order("start_at", { ascending: true });
+          if (legacy.error) throw legacy.error;
+          rows = legacy.data;
+        } else {
+          throw error;
+        }
+      }
 
       setItems(
-        (data ?? []).map((r: any) => ({
+        (rows ?? []).map((r: any) => ({
           id: String(r.id),
           start_at: String(r.start_at),
           end_at: String(r.end_at),
           is_active: Boolean(r.is_active),
+          duration_minutes:
+            Number(r.duration_minutes ?? 0) ||
+            Math.max(
+              0,
+              Math.round(
+                (new Date(String(r.end_at)).getTime() - new Date(String(r.start_at)).getTime()) /
+                  60000
+              )
+            ) ||
+            30,
         }))
       );
     } catch (e: any) {
@@ -3844,7 +4542,7 @@ function DoctorAvailability() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate]);
+  }, [selectedDate, doctorEmail]);
 
   // mapa HH:MM -> id da availability ativa naquele horário
   const slotMap = useMemo(() => {
@@ -3864,7 +4562,7 @@ function DoctorAvailability() {
   }
 
   async function toggleSlot(slot: string) {
-    if (!selectedDate) return;
+    if (!selectedDate || !doctorEmail) return;
     setLoading(true);
     try {
       const existingId = slotMap.get(slot);
@@ -3878,22 +4576,49 @@ function DoctorAvailability() {
         const { error } = await supabase
           .from("doctor_availability")
           .update({ is_active: false })
-          .eq("id", existingId);
+          .eq("id", existingId)
+          .eq("doctor_email", doctorEmail);
 
-        if (error) throw error;
+        if (error) {
+          if ((error.message || "").toLowerCase().includes("doctor_email")) {
+            const legacy = await supabase
+              .from("doctor_availability")
+              .update({ is_active: false })
+              .eq("id", existingId);
+            if (legacy.error) throw legacy.error;
+          } else {
+            throw error;
+          }
+        }
       } else {
         // cria disponibilidade
         const start_at = recifeISO(selectedDate, hh, mm);
-        const endMinutes = hh * 60 + mm + 30;
+        const duration = Math.max(5, Number(slotDurationMin) || 30);
+        const endMinutes = hh * 60 + mm + duration;
         const endH = Math.floor(endMinutes / 60);
         const endM = endMinutes % 60;
         const end_at = recifeISO(selectedDate, endH, endM);
 
-        const { error } = await supabase.from("doctor_availability").insert({
+        let { error } = await supabase.from("doctor_availability").insert({
           start_at,
           end_at,
           is_active: true,
+          doctor_email: doctorEmail,
+          duration_minutes: duration,
         });
+
+        if (
+          error &&
+          ((error.message || "").toLowerCase().includes("doctor_email") ||
+            (error.message || "").toLowerCase().includes("duration_minutes"))
+        ) {
+          const legacy = await supabase.from("doctor_availability").insert({
+            start_at,
+            end_at,
+            is_active: true,
+          });
+          error = legacy.error;
+        }
 
         if (error) throw error;
       }
@@ -3901,6 +4626,13 @@ function DoctorAvailability() {
       await load();
     } catch (e: any) {
       console.error(e);
+      if ((e?.message || "").toLowerCase().includes("row-level security")) {
+        alert(
+          "Erro de permissão (RLS) na tabela doctor_availability. " +
+            "Crie/ajuste a policy para permitir insert/update do médico logado."
+        );
+        return;
+      }
       alert(
         "Erro ao atualizar disponibilidade: " +
           (e?.message ?? "desconhecido")
@@ -3934,7 +4666,7 @@ function DoctorAvailability() {
               </div>
               <div className="mt-1 text-sm text-slate-500">
                 Clique nos horários para ativar/desativar a agenda desse dia
-                (blocos de 30 minutos).
+                (blocos com a duração escolhida).
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -3943,6 +4675,18 @@ function DoctorAvailability() {
                 value={selectedDate}
                 onChange={setSelectedDate}
                 type="date"
+              />
+              <Select
+                label="Duração"
+                value={slotDurationMin}
+                onChange={setSlotDurationMin}
+                options={[
+                  { label: "15 min", value: "15" },
+                  { label: "20 min", value: "20" },
+                  { label: "30 min", value: "30" },
+                  { label: "45 min", value: "45" },
+                  { label: "60 min", value: "60" },
+                ]}
               />
             </div>
           </div>
@@ -4219,7 +4963,7 @@ const DOCTOR_HEADER = {
 const LOGO_BASE64 = "data:image/jpeg;base64,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";
 
 // Gravar consulta
-function RecordConsultationMock() {
+function RecordConsultationMock({ doctorEmail }: { doctorEmail: string }) {
   const [children, setChildren] = useState<Child[]>([]);
   const [loading, setLoading] = useState(false);
   const [patientId, setPatientId] = useState<string>("");
@@ -4246,6 +4990,9 @@ const [sendEmail, setSendEmail] = useState<string>(""); // email
   const [retorno, setRetorno] = useState("");
 const [timerRunning, setTimerRunning] = useState(false);
 const [timerSeconds, setTimerSeconds] = useState(0);
+const doctorPdf = useMemo(() => getDoctorPdfSettings(doctorEmail), [doctorEmail]);
+const DOCTOR_HEADER = doctorPdf;
+const LOGO_BASE64 = doctorPdf.logoBase64;
 
 
 
@@ -4265,8 +5012,9 @@ function formatTimer(secs: number) {
   const [weight, setWeight] = useState(""); // kg
   const [height, setHeight] = useState(""); // cm
   const [headCircumference, setHeadCircumference] = useState(""); // cm
-// ✅ modal pós-salvar para WhatsApp/E-mail
-
+  //✅ modal pós-salvar para WhatsApp/E-mail
+  // evita salvamentos concorrentes (ex: double-click)
+  const savingRef = useRef(false);
 
   const selectedChild = useMemo(
   () => children.find((c) => c.id === patientId) ?? null,
@@ -4382,52 +5130,47 @@ useEffect(() => {
 
     let y = 10;
 
-    // --- LOGO (se tiver base64 preenchido) ---
+    const headerTop = y;
+    const logoX = 10;
+    const logoY = headerTop;
+    const logoWidth = 18;
+    const logoHeight = 18;
+    const textX = logoX + logoWidth + 4;
+    const textRightPadding = 10;
+    const textWidth = pageWidth - textX - textRightPadding;
+
     if (LOGO_BASE64 && LOGO_BASE64.length > 0) {
-      const logoWidth = 22;
-      const logoHeight = 22;
-      const logoX = (pageWidth - logoWidth) / 2;
-      doc.addImage(LOGO_BASE64, "PNG", logoX, y, logoWidth, logoHeight);
-      y += logoHeight + 4;
+      const imageFormat = getImageFormatFromBase64(LOGO_BASE64);
+      doc.addImage(LOGO_BASE64, imageFormat, logoX, logoY, logoWidth, logoHeight);
     }
 
-    // data de emissão / base, alinhada à direita
     const emissionDate = formatDateBR(new Date().toISOString());
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Data: ${emissionDate}`, pageWidth - 10, y, { align: "right" });
-    y += 6;
 
-    // --- CABEÇALHO DO CONSULTÓRIO ---
-    doc.setFontSize(14);
+    let textY = headerTop + 4;
     doc.setFont("helvetica", "bold");
-    doc.text(DOCTOR_HEADER.doctorName, pageWidth / 2, y, { align: "center" });
-    y += 6;
+    doc.setFontSize(12);
+    doc.text(DOCTOR_HEADER.doctorName, textX, textY);
 
-    doc.setFontSize(11);
+    textY += 4.5;
     doc.setFont("helvetica", "normal");
-    doc.text(DOCTOR_HEADER.specialty, pageWidth / 2, y, { align: "center" });
-    y += 5;
+    doc.setFontSize(9);
+    doc.text(`${DOCTOR_HEADER.specialty} • ${DOCTOR_HEADER.registration}`, textX, textY, {
+      maxWidth: textWidth,
+    });
 
-    doc.text(DOCTOR_HEADER.registration, pageWidth / 2, y, { align: "center" });
-    y += 5;
+    textY += 4.5;
+    doc.text(DOCTOR_HEADER.clinicName, textX, textY, { maxWidth: textWidth });
 
-    doc.text(DOCTOR_HEADER.clinicName, pageWidth / 2, y, { align: "center" });
-    y += 5;
+    textY += 4.5;
+    const addressCompact = [DOCTOR_HEADER.clinicAddress, DOCTOR_HEADER.clinicPhone]
+      .filter(Boolean)
+      .join(" • ");
+    doc.text(addressCompact, textX, textY, { maxWidth: textWidth });
 
-    const addressLines = doc.splitTextToSize(
-      DOCTOR_HEADER.clinicAddress,
-      pageWidth - 30
-    );
-    doc.text(addressLines, pageWidth / 2, y, { align: "center" });
-    y += addressLines.length * 5;
+    doc.setFontSize(8.5);
+    doc.text(`Data: ${emissionDate}`, pageWidth - 10, headerTop + 4, { align: "right" });
 
-    if (DOCTOR_HEADER.clinicPhone) {
-      doc.text(DOCTOR_HEADER.clinicPhone, pageWidth / 2, y, {
-        align: "center",
-      });
-      y += 6;
-    }
+    y = Math.max(logoY + logoHeight, textY) + 4;
 
     // Linha separando o cabeçalho do corpo da ficha
     doc.setLineWidth(0.3);
@@ -4449,7 +5192,12 @@ useEffect(() => {
     doc.text(`Paciente: ${child.name}`, 10, y);
     y += 6;
 
-    doc.text(`Data da consulta: ${formatDateBR(date)}`, 10, y);
+    const ageAtConsult = child.birthDate ? calcAgeText(child.birthDate, date) : "";
+    doc.text(
+      `Data da consulta: ${formatDateBR(date)}${ageAtConsult ? ` • Idade: ${ageAtConsult}` : ""}`,
+      10,
+      y
+    );
     y += 6;
 
     if (child.birthDate) {
@@ -4570,7 +5318,13 @@ function buildPdfForCurrentForm(child: Child) {
   doc.setFont("helvetica", "bold");
   doc.text("DATA:", pageWidth - 55, y);
   doc.setFont("helvetica", "normal");
-  doc.text(formatDateBR(date), pageWidth - 20, y, { align: "right" });
+  const ageAtConsult = child.birthDate ? calcAgeText(child.birthDate, date) : "";
+  doc.text(
+    `${formatDateBR(date)}${ageAtConsult ? ` • ${ageAtConsult}` : ""}`,
+    pageWidth - 20,
+    y,
+    { align: "right" }
+  );
 
   // --- 3. BLOCO DE BIOMETRIA (O que você adicionou agora) ---
   y += 10;
@@ -4623,6 +5377,9 @@ function buildPdfForCurrentForm(child: Child) {
 async function salvarConsulta() {
   if (!patientId) return alert("Selecione um paciente.");
   if (!conduta.trim()) return alert("Preencha a conduta.");
+
+  if (savingRef.current) return; // já está salvando
+  savingRef.current = true;
 
   const child = children.find((c) => c.id === patientId);
   if (!child) return alert("Paciente inválido.");
@@ -4750,6 +5507,7 @@ async function salvarConsulta() {
   } catch (e: any) {
     alert("Erro no processo: " + e.message);
   } finally {
+    savingRef.current = false;
     setLoading(false);
   }
 }
@@ -4774,40 +5532,47 @@ async function salvarConsulta() {
 
   let y = 10;
 
-  // LOGO
+  const headerTop = y;
+  const logoX = 10;
+  const logoY = headerTop;
+  const logoWidth = 18;
+  const logoHeight = 18;
+  const textX = logoX + logoWidth + 4;
+  const textRightPadding = 10;
+  const textWidth = pageWidth - textX - textRightPadding;
+
   if (LOGO_BASE64 && LOGO_BASE64.length > 0 && !LOGO_BASE64.includes("SEU_BASE64_AQUI")) {
-    const logoWidth = 22;
-    const logoHeight = 22;
-    const logoX = (pageWidth - logoWidth) / 2;
-    doc.addImage(LOGO_BASE64, "PNG", logoX, y, logoWidth, logoHeight);
-    y += logoHeight + 4;
+    const imageFormat = getImageFormatFromBase64(LOGO_BASE64);
+    doc.addImage(LOGO_BASE64, imageFormat, logoX, logoY, logoWidth, logoHeight);
   }
 
-  // CABEÇALHO
-  doc.setFontSize(14);
+  const emissionDate = formatDateBR(new Date().toISOString());
+
+  let textY = headerTop + 4;
   doc.setFont("helvetica", "bold");
-  doc.text(DOCTOR_HEADER.doctorName, pageWidth / 2, y, { align: "center" });
-  y += 6;
+  doc.setFontSize(12);
+  doc.text(DOCTOR_HEADER.doctorName, textX, textY);
 
-  doc.setFontSize(11);
+  textY += 4.5;
   doc.setFont("helvetica", "normal");
-  doc.text(DOCTOR_HEADER.specialty, pageWidth / 2, y, { align: "center" });
-  y += 5;
+  doc.setFontSize(9);
+  doc.text(`${DOCTOR_HEADER.specialty} • ${DOCTOR_HEADER.registration}`, textX, textY, {
+    maxWidth: textWidth,
+  });
 
-  doc.text(DOCTOR_HEADER.registration, pageWidth / 2, y, { align: "center" });
-  y += 5;
+  textY += 4.5;
+  doc.text(DOCTOR_HEADER.clinicName, textX, textY, { maxWidth: textWidth });
 
-  doc.text(DOCTOR_HEADER.clinicName, pageWidth / 2, y, { align: "center" });
-  y += 5;
+  textY += 4.5;
+  const addressCompact = [DOCTOR_HEADER.clinicAddress, DOCTOR_HEADER.clinicPhone]
+    .filter(Boolean)
+    .join(" • ");
+  doc.text(addressCompact, textX, textY, { maxWidth: textWidth });
 
-  const addressLines = doc.splitTextToSize(DOCTOR_HEADER.clinicAddress, pageWidth - 30);
-  doc.text(addressLines, pageWidth / 2, y, { align: "center" });
-  y += addressLines.length * 5;
+  doc.setFontSize(8.5);
+  doc.text(`Data: ${emissionDate}`, pageWidth - 10, headerTop + 4, { align: "right" });
 
-  if (DOCTOR_HEADER.clinicPhone) {
-    doc.text(DOCTOR_HEADER.clinicPhone, pageWidth / 2, y, { align: "center" });
-    y += 6;
-  }
+  y = Math.max(logoY + logoHeight, textY) + 4;
 
   doc.setLineWidth(0.3);
   doc.line(10, y, pageWidth - 10, y);
@@ -4822,7 +5587,13 @@ async function salvarConsulta() {
   doc.setFontSize(11);
   doc.setFont("helvetica", "normal");
   doc.text(`Paciente: ${child.name}`, 10, y); y += 6;
-  doc.text(`Data da consulta: ${formatDateBR(date)}`, 10, y); y += 6;
+  const ageAtConsult = child.birthDate ? calcAgeText(child.birthDate, date) : "";
+  doc.text(
+    `Data da consulta: ${formatDateBR(date)}${ageAtConsult ? ` • Idade: ${ageAtConsult}` : ""}`,
+    10,
+    y
+  );
+  y += 6;
 
   if (child.birthDate) {
     doc.text(`Nascimento: ${formatDateBR(child.birthDate)}`, 10, y);
@@ -5000,7 +5771,7 @@ async function salvarConsulta() {
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <Input
               label="Peso (kg)"
-              value={weight}
+              value={weight}  
               onChange={setWeight}
               type="text"
               placeholder="Ex: 8.5 ou 8,5"
@@ -5165,23 +5936,6 @@ export default function IndexPage() {
   function onLoggedIn(u: AppUser) {
     localStorage.setItem(`rbgp_role_${u.email.toLowerCase()}`, u.role);
     setAppUser(u);
-
-    // caso o médico esteja entrando e não tenha plano ativo,
-    // oferecemos ativar automaticamente para facilitar os testes.
-    if (u.role === "doctor") {
-      const planKey = `rbgp_plan_${u.email.toLowerCase()}`;
-      const current = localStorage.getItem(planKey) ?? "Cancelado";
-      if (current !== "Ativo") {
-        if (
-          confirm(
-            "Seu plano não está ativo. Deseja ativá‑lo automaticamente para teste?"
-          )
-        ) {
-          localStorage.setItem(planKey, "Ativo");
-          window.dispatchEvent(new Event("rbgp_plan_updated"));
-        }
-      }
-    }
   }
 
   return (
@@ -5206,6 +5960,10 @@ export default function IndexPage() {
               setLoginOpen(true);
             }}
             onDoctor={() => {
+              setLoginMode("doctor");
+              setLoginOpen(true);
+            }}
+            onSubscribeDoctor={() => {
               setLoginMode("doctor");
               setLoginOpen(true);
             }}
@@ -5269,9 +6027,11 @@ function TopBar({
 function Landing({
   onGuardian,
   onDoctor,
+  onSubscribeDoctor,
 }: {
   onGuardian: () => void;
   onDoctor: () => void;
+  onSubscribeDoctor: () => void;
 }) {
   return (
     <Card>
@@ -5303,9 +6063,14 @@ function Landing({
               Acesso profissional: pacientes (Supabase) e gravação de consulta (mock).
             </div>
             <div className="mt-4">
-              <Button onClick={onDoctor}>
-                Acessar <ChevronRight className="h-4 w-4" />
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={onDoctor}>
+                  Acessar <ChevronRight className="h-4 w-4" />
+                </Button>
+                <Button variant="secondary" onClick={onSubscribeDoctor}>
+                  <CreditCard className="h-4 w-4" /> Assinar plano
+                </Button>
+              </div>
             </div>
           </div>
         </div>
