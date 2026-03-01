@@ -633,7 +633,7 @@ function LoginModal({
         alert(error.message);
         return;
       }
-      alert("Conta criada! Agora clique em Entrar.");
+      alert("Verifique seu e-mail para confirmar a conta. Depois disso, você já pode entrar.");
     } finally {
       setBusy(false);
     }
@@ -731,7 +731,7 @@ function LoginModal({
           value={password}
           onChange={setPassword}
           type="password"
-          placeholder="mínimo 6 caracteres"
+          placeholder="Coloque uma senha mesmo se for assinar"
         />
 
         {mode === "doctor" ? (
@@ -739,7 +739,7 @@ function LoginModal({
             label="Cupom (opcional)"
             value={promoCode}
             onChange={setPromoCode}
-            
+            placeholder="Insira um cupom se tiver"
           />
         ) : null}
 
@@ -5808,7 +5808,7 @@ async function salvarConsulta() {
   disabled={!patientId || children.length === 0}
   variant="secondary"
 >
-  Salvar consulta em PDF
+  Abrir consulta em PDF
 </Button>
 
             
@@ -6060,7 +6060,7 @@ function Landing({
               <Stethoscope className="h-4 w-4" /> Área do pediatra
             </div>
             <div className="mt-2 text-sm text-slate-600">
-              Acesso profissional: pacientes (Supabase) e gravação de consulta (mock).
+              Acesso profissional: Marcação de consultas, gravação de consulta e mais.
             </div>
             <div className="mt-4">
               <div className="flex flex-wrap gap-2">

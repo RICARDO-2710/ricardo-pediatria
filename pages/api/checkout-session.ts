@@ -5,6 +5,46 @@ import Stripe from "stripe";
 const PROFESSIONAL_PRICE_ID = process.env.STRIPE_PRICE_PROFESSIONAL?.trim();
 const PROFESSIONAL_PRODUCT_ID = process.env.STRIPE_PRODUCT_PROFESSIONAL?.trim();
 
+function withHttpScheme(urlLike: string) {
+  if (/^https?:\/\//i.test(urlLike)) return urlLike;
+  return `https://${urlLike}`;
+}
+
+function resolveAppBaseUrl(req: NextApiRequest) {
+  const candidates = [
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.VERCEL_URL,
+  ]
+    .map((value) => (value || "").trim())
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      const normalized = withHttpScheme(candidate);
+      const parsed = new URL(normalized);
+      return parsed.origin;
+    } catch {
+      continue;
+    }
+  }
+
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  if (forwardedHost) {
+    const proto = forwardedProto || "https";
+    return `${proto}://${forwardedHost}`;
+  }
+
+  const host = String(req.headers.host || "").trim();
+  if (host) {
+    const proto = host.includes("localhost") ? "http" : "https";
+    return `${proto}://${host}`;
+  }
+
+  return null;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end();
   const { email, promoCode } = req.body as { email?: string; promoCode?: string };
@@ -41,6 +81,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    const appBaseUrl = resolveAppBaseUrl(req);
+    if (!appBaseUrl) {
+      return res.status(500).json({
+        error:
+          "Não foi possível determinar a URL do app. Defina NEXT_PUBLIC_APP_URL com https://...",
+      });
+    }
+
     const checkoutParams: Stripe.Checkout.SessionCreateParams = {
       mode: "subscription",
       payment_method_types: ["card"],
@@ -56,8 +104,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           source: "doctor_checkout",
         },
       },
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/?success=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/?canceled=true`,
+      success_url: `${appBaseUrl}/?success=true`,
+      cancel_url: `${appBaseUrl}/?canceled=true`,
     };
 
     const normalizedPromoCode = (promoCode || "").trim();
