@@ -56,6 +56,91 @@ const WHO_DATA = {
   }
 };
 
+type GrowthCurveMetric = "weight" | "height" | "head";
+type GrowthSexKey = "M" | "F";
+
+const WHO_CURVE_TABLE: Record<
+  GrowthCurveMetric,
+  Record<GrowthSexKey, Record<number, { z3: number; z2: number; z1?: number; z0: number; zm1?: number; zm2: number; zm3: number }>>
+> = {
+  height: {
+    M: {
+      0: { z3: 56.0, z2: 54.0, z0: 50.0, zm2: 46.0, zm3: 44.0 },
+      6: { z3: 73.0, z2: 71.0, z0: 66.0, zm2: 61.0, zm3: 59.0 },
+      12: { z3: 82.0, z2: 79.0, z0: 75.0, zm2: 70.0, zm3: 67.0 },
+      24: { z3: 97.0, z2: 94.0, z0: 88.0, zm2: 81.0, zm3: 78.0 },
+    },
+    F: {
+      0: { z3: 55.0, z2: 53.0, z0: 49.0, zm2: 45.0, zm3: 43.0 },
+      6: { z3: 71.5, z2: 69.5, z0: 64.5, zm2: 60.0, zm3: 58.0 },
+      12: { z3: 80.5, z2: 78.0, z0: 73.8, zm2: 69.0, zm3: 66.5 },
+      24: { z3: 95.0, z2: 92.0, z0: 86.5, zm2: 80.0, zm3: 77.0 },
+    },
+  },
+  weight: {
+    M: {
+      0: { z3: 5.0, z2: 4.3, z0: 3.3, zm2: 2.4, zm3: 2.1 },
+      6: { z3: 10.8, z2: 9.4, z0: 7.9, zm2: 6.1, zm3: 5.6 },
+      12: { z3: 13.2, z2: 12.0, z0: 9.7, zm2: 7.5, zm3: 6.8 },
+      24: { z3: 17.2, z2: 15.2, z0: 12.2, zm2: 9.7, zm3: 8.8 },
+    },
+    F: {
+      0: { z3: 4.8, z2: 4.2, z0: 3.2, zm2: 2.4, zm3: 2.0 },
+      6: { z3: 9.9, z2: 8.9, z0: 7.3, zm2: 5.8, zm3: 5.2 },
+      12: { z3: 12.2, z2: 11.3, z0: 8.9, zm2: 7.1, zm3: 6.4 },
+      24: { z3: 15.8, z2: 14.8, z0: 11.5, zm2: 9.0, zm3: 8.1 },
+    },
+  },
+  head: {
+    M: {
+      0: { z3: 38.5, z2: 37.5, z1: 36.5, z0: 35.5, zm1: 34.5, zm2: 33.5, zm3: 31.0 },
+      6: { z3: 47.0, z2: 46.0, z1: 45.0, z0: 44.0, zm1: 43.0, zm2: 42.0, zm3: 40.5 },
+      12: { z3: 50.0, z2: 48.8, z1: 47.5, z0: 46.5, zm1: 45.5, zm2: 44.0, zm3: 42.5 },
+      24: { z3: 52.5, z2: 51.0, z1: 49.5, z0: 48.5, zm1: 47.0, zm2: 45.6, zm3: 44.3 },
+    },
+    F: {
+      0: { z3: 37.8, z2: 36.9, z1: 35.9, z0: 34.9, zm1: 33.9, zm2: 32.9, zm3: 30.4 },
+      6: { z3: 46.0, z2: 45.0, z1: 44.0, z0: 43.0, zm1: 42.0, zm2: 41.0, zm3: 39.6 },
+      12: { z3: 48.8, z2: 47.8, z1: 46.6, z0: 45.6, zm1: 44.6, zm2: 43.2, zm3: 41.8 },
+      24: { z3: 51.0, z2: 49.8, z1: 48.4, z0: 47.2, zm1: 46.0, zm2: 44.8, zm3: 43.5 },
+    },
+  },
+};
+
+function interpolateWhoCurve(
+  metric: GrowthCurveMetric,
+  sex: GrowthSexKey,
+  ageMonths: number,
+  key: "z3" | "z2" | "z1" | "z0" | "zm1" | "zm2" | "zm3"
+): number | null {
+  const table = WHO_CURVE_TABLE[metric][sex] as Record<number, Record<string, number | undefined>>;
+  if (ageMonths in table) {
+    const value = table[ageMonths][key];
+    return value == null ? null : value;
+  }
+
+  const ages = Object.keys(table)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const lower = ages.filter((age) => age < ageMonths).pop();
+  const higher = ages.find((age) => age > ageMonths);
+
+  if (lower == null && higher == null) return null;
+  if (lower == null) {
+    const value = table[higher!][key];
+    return value == null ? null : value;
+  }
+  if (higher == null) {
+    const value = table[lower][key];
+    return value == null ? null : value;
+  }
+
+  const vLow = table[lower][key];
+  const vHigh = table[higher][key];
+  if (vLow == null || vHigh == null) return null;
+  return vLow + ((vHigh - vLow) * (ageMonths - lower)) / (higher - lower);
+}
+
 
 
 
@@ -3264,7 +3349,7 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
                         <div>
                           <b>Peso:</b> {c.weight} kg
                         </div>
-                      )}
+                      )}  
                       {c.height && (
                         <div>
                           <b>Altura:</b> {c.height} cm
@@ -3482,7 +3567,11 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
     | "patients"
     | "agenda"
     | "record"
+    | "growth"
+    | "development"
+    | "vaccines"
     | "availability"
+    | "medicines"
     | "doc_prescription"
     | "doc_exam"
     | "doc_certificate"
@@ -3583,6 +3672,54 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
                   alert("Plano inativo. Ative em Configurações para usar.");
                   return;
                 }
+                setTab("growth");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "growth" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <BarChart3 className="inline h-4 w-4 mr-2" /> Gráfico
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("development");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "development" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <BarChart3 className="inline h-4 w-4 mr-2" /> Desenvolvimento
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("vaccines");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "vaccines" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <ShieldCheck className="inline h-4 w-4 mr-2" /> Vacinas
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("medicines");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "medicines" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <FileText className="inline h-4 w-4 mr-2" /> Medicamentos
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
                 setTab("doc_prescription");
               }}
               className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "doc_prescription" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
@@ -3651,6 +3788,10 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
           {tab === "agenda" && <DoctorAppointments />}
           {tab === "availability" && <DoctorAvailability />}
           {tab === "record" && <RecordConsultationMock doctorEmail={user.email} />}
+          {tab === "growth" && <DoctorGrowthDashboard />}
+          {tab === "development" && <DoctorDevelopmentTracker doctorEmail={user.email} />}
+          {tab === "vaccines" && <DoctorVaccineTracker doctorEmail={user.email} />}
+          {tab === "medicines" && <DoctorMedicineFinder />}
           {tab === "doc_prescription" && <DoctorDocumentComposer doctorEmail={user.email} kind="prescription" />}
           {tab === "doc_exam" && <DoctorDocumentComposer doctorEmail={user.email} kind="exam" />}
           {tab === "doc_certificate" && <DoctorDocumentComposer doctorEmail={user.email} kind="certificate" />}
@@ -3664,6 +3805,12 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
 function DoctorSettings({ user }: { user: AppUser }) {
   const [planStatus, setPlanStatus] = useState("Carregando");
   const [planRenewalDate, setPlanRenewalDate] = useState<string | null>(null);
+  const [planActiveSince, setPlanActiveSince] = useState<string | null>(null);
+  const [planStripeStatus, setPlanStripeStatus] = useState<string | null>(null);
+  const [planCancelAtPeriodEnd, setPlanCancelAtPeriodEnd] = useState(false);
+  const [planCancelAt, setPlanCancelAt] = useState<string | null>(null);
+  const [planSource, setPlanSource] = useState<string>("-");
+  const [refreshingPlan, setRefreshingPlan] = useState(false);
   const [loading, setLoading] = useState(false);
   const [pdfDoctorName, setPdfDoctorName] = useState("");
   const [pdfRegistration, setPdfRegistration] = useState("");
@@ -3671,26 +3818,58 @@ function DoctorSettings({ user }: { user: AppUser }) {
   const [pdfClinicPhone, setPdfClinicPhone] = useState("");
   const [pdfLogoBase64, setPdfLogoBase64] = useState("");
 
-  // busca estado real do plano no servidor
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/api/plan-status", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: user.email }),
-        });
-        const data = await res.json();
-        setPlanStatus(data.status ?? "Cancelado");
-        setPlanRenewalDate(data.renewalDate ?? null);
-      } catch (err) {
-        console.error("failed to load plan status", err);
-        setPlanStatus("Cancelado");
-        setPlanRenewalDate(null);
+  async function loadPlanStatus(showErrorAlert = false) {
+    setRefreshingPlan(true);
+    try {
+      const res = await fetch("/api/plan-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Falha ao buscar plano");
       }
+
+      setPlanStatus(data.status ?? "Cancelado");
+      setPlanRenewalDate(data.renewalDate ?? null);
+      setPlanActiveSince(data.activeSince ?? null);
+      setPlanStripeStatus(data.stripeStatus ?? null);
+      setPlanCancelAtPeriodEnd(Boolean(data.cancelAtPeriodEnd));
+      setPlanCancelAt(data.cancelAt ?? null);
+      setPlanSource(String(data.source || "-"));
+    } catch (err) {
+      console.error("failed to load plan status", err);
+      setPlanStatus("Cancelado");
+      setPlanRenewalDate(null);
+      setPlanActiveSince(null);
+      setPlanStripeStatus(null);
+      setPlanCancelAtPeriodEnd(false);
+      setPlanCancelAt(null);
+      setPlanSource("-");
+      if (showErrorAlert) {
+        alert(`Não foi possível atualizar o plano: ${err instanceof Error ? err.message : "erro desconhecido"}`);
+      }
+    } finally {
+      setRefreshingPlan(false);
     }
-    load();
+  }
+
+  useEffect(() => {
+    loadPlanStatus(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.email]);
+
+  const activeTimeText = useMemo(() => {
+    if (!planActiveSince) return "—";
+    const start = new Date(planActiveSince).getTime();
+    if (Number.isNaN(start)) return "—";
+    const now = Date.now();
+    const days = Math.max(0, Math.floor((now - start) / (1000 * 60 * 60 * 24)));
+    if (days <= 0) return "Hoje";
+    if (days === 1) return "1 dia";
+    return `${days} dias`;
+  }, [planActiveSince]);
 
   useEffect(() => {
     const settings = getDoctorPdfSettings(user.email);
@@ -3731,6 +3910,8 @@ function DoctorSettings({ user }: { user: AppUser }) {
 
       setPlanStatus("Cancelado");
       setPlanRenewalDate(null);
+      setPlanCancelAtPeriodEnd(false);
+      setPlanCancelAt(null);
       alert("Renovação automática cancelada.");
       window.dispatchEvent(new Event("rbgp_plan_updated"));
     } catch (err) {
@@ -3790,6 +3971,13 @@ function DoctorSettings({ user }: { user: AppUser }) {
               {planStatus.toUpperCase()}
             </span>
           </div>
+
+          <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
+            <span className="text-sm text-slate-600 font-medium">Assinatura Confirmada</span>
+            <span className="text-sm font-bold text-slate-900">
+              {planStatus === "Ativo" && planRenewalDate ? "Sim" : "Não"}
+            </span>
+          </div>
           
           <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
             <span className="text-sm text-slate-600 font-medium">Método de Pagamento</span>
@@ -3802,7 +3990,40 @@ function DoctorSettings({ user }: { user: AppUser }) {
               {planRenewalDate ? formatDateBR(planRenewalDate) : "—"}
             </span>
           </div>
+
+          <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
+            <span className="text-sm text-slate-600 font-medium">Tempo ativo</span>
+            <span className="text-sm font-bold text-slate-900">{activeTimeText}</span>
+          </div>
+
+          <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
+            <span className="text-sm text-slate-600 font-medium">Status Stripe</span>
+            <span className="text-sm font-bold text-slate-900">{planStripeStatus ? planStripeStatus.toUpperCase() : "—"}</span>
+          </div>
+
+          <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
+            <span className="text-sm text-slate-600 font-medium">Cancelamento agendado</span>
+            <span className="text-sm font-bold text-slate-900">{planCancelAtPeriodEnd ? "Sim" : "Não"}</span>
+          </div>
+
+          <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
+            <span className="text-sm text-slate-600 font-medium">Encerra em</span>
+            <span className="text-sm font-bold text-slate-900">{planCancelAt ? formatDateBR(planCancelAt) : "—"}</span>
+          </div>
+
+          <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
+            <span className="text-sm text-slate-600 font-medium">Fonte de validação</span>
+            <span className="text-sm font-bold text-slate-900">{planSource === "stripe" ? "Stripe" : planSource === "supabase" ? "Supabase" : "—"}</span>
+          </div>
         </div>
+
+        <button
+          onClick={() => loadPlanStatus(true)}
+          disabled={refreshingPlan || loading}
+          className="mt-4 flex items-center gap-2 text-xs text-slate-700 font-bold hover:text-slate-900 transition"
+        >
+          {refreshingPlan ? "Atualizando status..." : "ATUALIZAR STATUS AGORA"}
+        </button>
 
         {planStatus === "Ativo" && (
           <button 
@@ -4857,6 +5078,1815 @@ function DoctorAvailability() {
 }
 
 type DoctorDocumentKind = "prescription" | "exam" | "certificate" | "report";
+
+type MedicineOffer = {
+  title: string;
+  price: number;
+  storeName: string;
+  url: string;
+};
+
+type MedicineSearchPayload = {
+  query: string;
+  lowestPrice: MedicineOffer | null;
+  offers: MedicineOffer[];
+  priceWarning?: string | null;
+  leaflet: {
+    title: string;
+    summary: string;
+    sourceUrl: string;
+  } | null;
+  leafletSearchUrl: string;
+};
+
+type DevelopmentMilestone = {
+  id: string;
+  title: string;
+  howTo: string;
+  minMonth: number;
+  maxMonth: number;
+};
+
+type DevelopmentMark = {
+  acquired: boolean;
+  acquiredMonth: string;
+};
+
+type VaccineSection = "ate12" | "apos12" | "campanhas";
+
+type VaccineScheduleItem = {
+  id: string;
+  section: VaccineSection;
+  vaccine: string;
+  dose: string;
+  minMonth: number;
+  maxMonth: number;
+};
+
+type VaccineMark = {
+  done: boolean;
+};
+
+const VACCINE_SCHEDULE: VaccineScheduleItem[] = [
+  { id: "vac_001", section: "ate12", vaccine: "BCG", dose: "Dose única", minMonth: 0, maxMonth: 1 },
+  { id: "vac_002", section: "ate12", vaccine: "Hepatite B", dose: "Dose ao nascer", minMonth: 0, maxMonth: 1 },
+  { id: "vac_003", section: "ate12", vaccine: "Penta", dose: "1ª dose", minMonth: 2, maxMonth: 2 },
+  { id: "vac_004", section: "ate12", vaccine: "Penta", dose: "2ª dose", minMonth: 4, maxMonth: 4 },
+  { id: "vac_005", section: "ate12", vaccine: "Penta", dose: "3ª dose", minMonth: 6, maxMonth: 6 },
+  { id: "vac_006", section: "ate12", vaccine: "Rotavírus humano", dose: "1ª dose", minMonth: 2, maxMonth: 2 },
+  { id: "vac_007", section: "ate12", vaccine: "Rotavírus humano", dose: "2ª dose", minMonth: 4, maxMonth: 4 },
+  { id: "vac_008", section: "ate12", vaccine: "Pneumocócica 10V (conjugada)", dose: "1ª dose", minMonth: 2, maxMonth: 2 },
+  { id: "vac_009", section: "ate12", vaccine: "Pneumocócica 10V (conjugada)", dose: "2ª dose", minMonth: 4, maxMonth: 4 },
+  { id: "vac_010", section: "ate12", vaccine: "VIP", dose: "1ª dose", minMonth: 2, maxMonth: 2 },
+  { id: "vac_011", section: "ate12", vaccine: "VIP", dose: "2ª dose", minMonth: 4, maxMonth: 4 },
+  { id: "vac_012", section: "ate12", vaccine: "VIP", dose: "3ª dose", minMonth: 6, maxMonth: 6 },
+  { id: "vac_013", section: "ate12", vaccine: "Meningocócica C (conjugada)", dose: "1ª dose", minMonth: 3, maxMonth: 3 },
+  { id: "vac_014", section: "ate12", vaccine: "Meningocócica C (conjugada)", dose: "2ª dose", minMonth: 5, maxMonth: 5 },
+  { id: "vac_015", section: "ate12", vaccine: "Febre amarela", dose: "Dose", minMonth: 9, maxMonth: 9 },
+  { id: "vac_016", section: "ate12", vaccine: "Tríplice viral", dose: "1ª dose", minMonth: 12, maxMonth: 12 },
+  { id: "vac_017", section: "ate12", vaccine: "Covid-19", dose: "1ª dose", minMonth: 6, maxMonth: 8 },
+  { id: "vac_018", section: "ate12", vaccine: "Covid-19", dose: "2ª dose", minMonth: 7, maxMonth: 9 },
+  { id: "vac_019", section: "ate12", vaccine: "Covid-19", dose: "3ª dose", minMonth: 8, maxMonth: 11 },
+  { id: "vac_020", section: "apos12", vaccine: "Pneumocócica 10V (conjugada)", dose: "Reforço", minMonth: 12, maxMonth: 15 },
+  { id: "vac_021", section: "apos12", vaccine: "Meningocócica C (conjugada)", dose: "Reforço", minMonth: 12, maxMonth: 15 },
+  { id: "vac_022", section: "apos12", vaccine: "DTP", dose: "1º reforço", minMonth: 15, maxMonth: 18 },
+  { id: "vac_023", section: "apos12", vaccine: "DTP", dose: "2º reforço", minMonth: 48, maxMonth: 60 },
+  { id: "vac_024", section: "apos12", vaccine: "VOP", dose: "1º reforço", minMonth: 15, maxMonth: 18 },
+  { id: "vac_025", section: "apos12", vaccine: "VOP", dose: "2º reforço", minMonth: 48, maxMonth: 60 },
+  { id: "vac_026", section: "apos12", vaccine: "Tetraviral", dose: "Dose única", minMonth: 15, maxMonth: 15 },
+  { id: "vac_027", section: "apos12", vaccine: "Varicela", dose: "Uma dose", minMonth: 48, maxMonth: 60 },
+  { id: "vac_028", section: "apos12", vaccine: "Febre amarela", dose: "Dose de reforço", minMonth: 48, maxMonth: 60 },
+  { id: "vac_029", section: "apos12", vaccine: "Hepatite A", dose: "Uma dose", minMonth: 15, maxMonth: 24 },
+  { id: "vac_030", section: "apos12", vaccine: "HPV", dose: "1ª dose", minMonth: 108, maxMonth: 168 },
+  { id: "vac_031", section: "apos12", vaccine: "HPV", dose: "2ª dose", minMonth: 114, maxMonth: 174 },
+  { id: "vac_032", section: "apos12", vaccine: "Pneumocócica 23V (povos indígenas)", dose: "Uma dose", minMonth: 24, maxMonth: 999 },
+  { id: "vac_033", section: "campanhas", vaccine: "Influenza", dose: "Anual", minMonth: 6, maxMonth: 999 },
+  { id: "vac_034", section: "campanhas", vaccine: "Dengue", dose: "1ª dose", minMonth: 120, maxMonth: 168 },
+  { id: "vac_035", section: "campanhas", vaccine: "Dengue", dose: "2ª dose", minMonth: 123, maxMonth: 171 },
+];
+
+const DEVELOPMENT_MILESTONES: DevelopmentMilestone[] = [
+  {
+    id: "m01",
+    title: "Postura: pernas e braços fletidos, cabeça lateralizada",
+    howTo: "Deite em superfície plana e observe se mantém flexão dos membros e cabeça lateralizada.",
+    minMonth: 0,
+    maxMonth: 0,
+  },
+  {
+    id: "m02",
+    title: "Observa um rosto",
+    howTo: "Aproxime seu rosto (~30cm) e observe contato visual.",
+    minMonth: 0,
+    maxMonth: 0,
+  },
+  {
+    id: "m03",
+    title: "Reage ao som",
+    howTo: "Produza som suave próximo às orelhas e observe reação.",
+    minMonth: 0,
+    maxMonth: 0,
+  },
+  {
+    id: "m04",
+    title: "Eleva a cabeça",
+    howTo: "Em decúbito ventral, observe se eleva a cabeça.",
+    minMonth: 0,
+    maxMonth: 0,
+  },
+  {
+    id: "m05",
+    title: "Sorri quando estimulada",
+    howTo: "Converse e sorria para a criança, observando resposta.",
+    minMonth: 1,
+    maxMonth: 2,
+  },
+  {
+    id: "m06",
+    title: "Abre as mãos",
+    howTo: "Observe espontaneamente em diferentes momentos.",
+    minMonth: 1,
+    maxMonth: 2,
+  },
+  {
+    id: "m07",
+    title: "Emite sons",
+    howTo: "Observe vocalizações simples no ambiente domiciliar ou consulta.",
+    minMonth: 1,
+    maxMonth: 2,
+  },
+  {
+    id: "m08",
+    title: "Movimenta os membros",
+    howTo: "Observe movimentação ativa de membros superiores e inferiores.",
+    minMonth: 1,
+    maxMonth: 2,
+  },
+  {
+    id: "m09",
+    title: "Responde ativamente ao contato social",
+    howTo: "Converse com o bebê e observe resposta social e sons.",
+    minMonth: 3,
+    maxMonth: 4,
+  },
+  {
+    id: "m10",
+    title: "Segura objetos",
+    howTo: "Toque dorso da mão com objeto e observe preensão.",
+    minMonth: 3,
+    maxMonth: 4,
+  },
+  {
+    id: "m11",
+    title: "Emite sons, ri alto",
+    howTo: "Observe risadas e sons com interação social.",
+    minMonth: 3,
+    maxMonth: 4,
+  },
+  {
+    id: "m12",
+    title: "Levanta a cabeça e apoia-se nos antebraços, de bruços",
+    howTo: "Em decúbito ventral, observar apoio em antebraços.",
+    minMonth: 3,
+    maxMonth: 4,
+  },
+  {
+    id: "m13",
+    title: "Busca ativa de objetos",
+    howTo: "Mostre objeto ao alcance visual e observe tentativa de alcance.",
+    minMonth: 5,
+    maxMonth: 6,
+  },
+  {
+    id: "m14",
+    title: "Leva objetos à boca",
+    howTo: "Ofereça objeto seguro na mão e observe exploração oral.",
+    minMonth: 5,
+    maxMonth: 6,
+  },
+  {
+    id: "m15",
+    title: "Localiza o som",
+    howTo: "Produza som suave e observe orientação da cabeça.",
+    minMonth: 5,
+    maxMonth: 6,
+  },
+  {
+    id: "m16",
+    title: "Muda de posição (rola)",
+    howTo: "Observe rolar durante estímulo em superfície plana.",
+    minMonth: 5,
+    maxMonth: 6,
+  },
+  {
+    id: "m17",
+    title: "Brinca de esconde-achou",
+    howTo: "Brinque de aparecer/desaparecer e observe procura.",
+    minMonth: 6,
+    maxMonth: 8,
+  },
+  {
+    id: "m18",
+    title: "Transfere objetos de uma mão para outra",
+    howTo: "Ofereça objeto e observe transferência manual.",
+    minMonth: 6,
+    maxMonth: 8,
+  },
+  {
+    id: "m19",
+    title: "Duplica sílabas",
+    howTo: "Observe emissão de sílabas repetidas (ex.: da-da).",
+    minMonth: 6,
+    maxMonth: 8,
+  },
+  {
+    id: "m20",
+    title: "Senta-se sem apoio",
+    howTo: "Observe se mantém sedestação sem apoio manual.",
+    minMonth: 6,
+    maxMonth: 8,
+  },
+  {
+    id: "m21",
+    title: "Imita gestos",
+    howTo: "Demonstre gestos simples e observe imitação.",
+    minMonth: 10,
+    maxMonth: 12,
+  },
+  {
+    id: "m22",
+    title: "Faz pinça",
+    howTo: "Observe preensão de objeto pequeno com polegar/indicador.",
+    minMonth: 10,
+    maxMonth: 12,
+  },
+  {
+    id: "m23",
+    title: "Produz jargão",
+    howTo: "Observe vocalização com padrão de conversa sem palavras claras.",
+    minMonth: 10,
+    maxMonth: 12,
+  },
+  {
+    id: "m24",
+    title: "Anda com apoio",
+    howTo: "Observe passos com apoio em móvel/adulto.",
+    minMonth: 10,
+    maxMonth: 12,
+  },
+  {
+    id: "m25",
+    title: "Mostra o que quer",
+    howTo: "Observe se aponta/estende mão para comunicar desejo.",
+    minMonth: 13,
+    maxMonth: 15,
+  },
+  {
+    id: "m26",
+    title: "Coloca blocos na caneca",
+    howTo: "Demonstre e observe se coloca blocos em recipiente.",
+    minMonth: 13,
+    maxMonth: 15,
+  },
+  {
+    id: "m27",
+    title: "Diz uma palavra",
+    howTo: "Observe emissão de pelo menos uma palavra com significado.",
+    minMonth: 13,
+    maxMonth: 15,
+  },
+  {
+    id: "m28",
+    title: "Anda sem apoio",
+    howTo: "Observe marcha independente com equilíbrio.",
+    minMonth: 13,
+    maxMonth: 15,
+  },
+  {
+    id: "m29",
+    title: "Usa colher ou garfo",
+    howTo: "Observe autoalimentação com utensílio.",
+    minMonth: 16,
+    maxMonth: 18,
+  },
+  {
+    id: "m30",
+    title: "Constrói torre de 2 cubos",
+    howTo: "Observe se empilha dois cubos sem derrubar imediatamente.",
+    minMonth: 16,
+    maxMonth: 18,
+  },
+  {
+    id: "m31",
+    title: "Fala 3 palavras",
+    howTo: "Observe uso de três palavras com significado.",
+    minMonth: 16,
+    maxMonth: 18,
+  },
+  {
+    id: "m32",
+    title: "Anda para trás",
+    howTo: "Solicite deslocamento curto para trás e observe execução.",
+    minMonth: 16,
+    maxMonth: 18,
+  },
+];
+
+function DoctorDevelopmentTracker({ doctorEmail }: { doctorEmail: string }) {
+  const [children, setChildren] = useState<Child[]>([]);
+  const [loadingChildren, setLoadingChildren] = useState(false);
+  const [patientId, setPatientId] = useState("");
+  const [evalDate, setEvalDate] = useState(new Date().toISOString().slice(0, 10));
+  const [marks, setMarks] = useState<Record<string, DevelopmentMark>>({});
+  const [pdfUrl, setPdfUrl] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [sendPhone, setSendPhone] = useState("");
+  const [sendEmail, setSendEmail] = useState("");
+
+  const doctorPdf = useMemo(() => getDoctorPdfSettings(doctorEmail), [doctorEmail]);
+
+  const selectedChild = useMemo(
+    () => children.find((c) => c.id === patientId) ?? null,
+    [children, patientId]
+  );
+
+  useEffect(() => {
+    const initial: Record<string, DevelopmentMark> = {};
+    DEVELOPMENT_MILESTONES.forEach((item) => {
+      initial[item.id] = { acquired: false, acquiredMonth: "" };
+    });
+    setMarks(initial);
+  }, []);
+
+  useEffect(() => {
+    setSendPhone(selectedChild?.guardianPhone ?? "");
+    setSendEmail(selectedChild?.guardianEmail ?? "");
+  }, [selectedChild?.guardianPhone, selectedChild?.guardianEmail]);
+
+  async function loadChildren() {
+    setLoadingChildren(true);
+    try {
+      let data: any[] | null = null;
+      let error: any = null;
+
+      ({ data, error } = await supabase
+        .from("children")
+        .select("id,name,birth_date,sex,guardian_email,guardian_phone")
+        .order("created_at", { ascending: false }));
+
+      if (error && /guardian_email|guardian_phone/i.test(String(error.message || ""))) {
+        ({ data, error } = await supabase
+          .from("children")
+          .select("id,name,birth_date,sex")
+          .order("created_at", { ascending: false }));
+      }
+
+      if (error) throw error;
+
+      const mapped: Child[] = (data ?? []).map((row: any) => ({
+        id: String(row.id),
+        name: String(row.name),
+        birthDate: String(row.birth_date || ""),
+        sex: (row.sex as Child["sex"]) ?? "O",
+        guardianEmail: row.guardian_email ? String(row.guardian_email) : null,
+        guardianPhone: row.guardian_phone ? String(row.guardian_phone) : null,
+      }));
+
+      setChildren(mapped);
+      if (!patientId && mapped[0]?.id) {
+        setPatientId(mapped[0].id);
+      }
+    } catch (err: any) {
+      alert(`Erro ao carregar pacientes: ${err?.message || "desconhecido"}`);
+      setChildren([]);
+    } finally {
+      setLoadingChildren(false);
+    }
+  }
+
+  useEffect(() => {
+    loadChildren();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const ageMonths = useMemo(() => {
+    if (!selectedChild?.birthDate || !evalDate) return null;
+    const birth = new Date(selectedChild.birthDate);
+    const ref = new Date(evalDate);
+    if (Number.isNaN(birth.getTime()) || Number.isNaN(ref.getTime())) return null;
+    let months = (ref.getFullYear() - birth.getFullYear()) * 12 + (ref.getMonth() - birth.getMonth());
+    if (ref.getDate() < birth.getDate()) months -= 1;
+    return Math.max(0, months);
+  }, [selectedChild?.birthDate, evalDate]);
+
+  const visibleMilestones = useMemo(() => {
+    if (ageMonths == null) return DEVELOPMENT_MILESTONES;
+    return DEVELOPMENT_MILESTONES.filter((item) => item.minMonth <= ageMonths);
+  }, [ageMonths]);
+
+  function updateMark(id: string, patch: Partial<DevelopmentMark>) {
+    setMarks((prev) => ({
+      ...prev,
+      [id]: {
+        acquired: prev[id]?.acquired ?? false,
+        acquiredMonth: prev[id]?.acquiredMonth ?? "",
+        ...patch,
+      },
+    }));
+  }
+
+  function getStatus(item: DevelopmentMilestone, mark: DevelopmentMark | undefined) {
+    if (!mark?.acquired) {
+      return { label: "Pendente", className: "bg-slate-100 text-slate-700" };
+    }
+
+    const month = Number(mark.acquiredMonth);
+    if (!Number.isFinite(month)) {
+      return { label: "Sem idade", className: "bg-amber-100 text-amber-800" };
+    }
+
+    if (month >= item.minMonth && month <= item.maxMonth) {
+      return { label: "Adequado", className: "bg-emerald-100 text-emerald-800" };
+    }
+
+    return { label: "Fora da faixa", className: "bg-rose-100 text-rose-800" };
+  }
+
+  const summary = useMemo(() => {
+    let adequate = 0;
+    let outOfRange = 0;
+    let pending = 0;
+
+    visibleMilestones.forEach((item) => {
+      const status = getStatus(item, marks[item.id]);
+      if (status.label === "Adequado") adequate += 1;
+      else if (status.label === "Fora da faixa") outOfRange += 1;
+      else pending += 1;
+    });
+
+    return { adequate, outOfRange, pending };
+  }, [marks, visibleMilestones]);
+
+  function buildPdfBlob() {
+    if (!selectedChild) throw new Error("Selecione um paciente.");
+    const child = selectedChild;
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const marginX = 10;
+    const tableWidth = pageWidth - marginX * 2;
+    const colWidths = [82, 24, 18, 20, 46];
+    const rowPaddingY = 2.5;
+    const lineHeight = 4.2;
+    let y = 12;
+
+    function drawTopHeader() {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text(doctorPdf.doctorName, marginX, y);
+      y += 5;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.text(`${doctorPdf.specialty} • ${doctorPdf.registration}`, marginX, y, { maxWidth: pageWidth - marginX * 2 });
+      y += 4.5;
+      doc.text(`${doctorPdf.clinicName} • ${doctorPdf.clinicPhone}`, marginX, y, { maxWidth: pageWidth - marginX * 2 });
+      y += 6;
+
+      doc.setLineWidth(0.3);
+      doc.line(marginX, y, pageWidth - marginX, y);
+      y += 7;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.text("Marcos do desenvolvimento infantil", pageWidth / 2, y, { align: "center" });
+      y += 6;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text(`Paciente: ${child.name}`, marginX, y);
+      y += 4.8;
+      doc.text(`Data da avaliação: ${formatDateBR(evalDate)}${ageMonths != null ? ` • Idade: ${ageMonths} meses` : ""}`, marginX, y);
+      y += 6;
+    }
+
+    function drawSummaryCards() {
+      const cardW = (tableWidth - 6) / 3;
+      const cardH = 12;
+      const baseY = y;
+      const cards = [
+        { label: "Adequados", value: summary.adequate, fill: [220, 252, 231], text: [6, 95, 70] },
+        { label: "Fora da faixa", value: summary.outOfRange, fill: [254, 226, 226], text: [127, 29, 29] },
+        { label: "Pendentes", value: summary.pending, fill: [241, 245, 249], text: [51, 65, 85] },
+      ];
+
+      cards.forEach((card, idx) => {
+        const x = marginX + idx * (cardW + 3);
+        doc.setFillColor(card.fill[0], card.fill[1], card.fill[2]);
+        doc.roundedRect(x, baseY, cardW, cardH, 1.5, 1.5, "F");
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8.5);
+        doc.setTextColor(card.text[0], card.text[1], card.text[2]);
+        doc.text(card.label, x + 2, baseY + 4.5);
+
+        doc.setFontSize(11);
+        doc.text(String(card.value), x + 2, baseY + 9.5);
+      });
+
+      doc.setTextColor(15, 23, 42);
+      y += cardH + 5;
+    }
+
+    function drawLegend() {
+      const items = [
+        { label: "Adequado", fill: [220, 252, 231] as [number, number, number] },
+        { label: "Fora da faixa", fill: [254, 226, 226] as [number, number, number] },
+        { label: "Pendente", fill: [241, 245, 249] as [number, number, number] },
+      ];
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("Legenda:", marginX, y);
+
+      let x = marginX + 18;
+      items.forEach((item) => {
+        doc.setFillColor(item.fill[0], item.fill[1], item.fill[2]);
+        doc.rect(x, y - 3.5, 4, 4, "F");
+        doc.setFont("helvetica", "normal");
+        doc.text(item.label, x + 6, y);
+        x += 42;
+      });
+      y += 7;
+    }
+
+    function drawTableHeader() {
+      const headers = ["Marco", "Faixa", "Adquiriu", "Idade", "Status"];
+      const headerH = 8;
+
+      doc.setFillColor(241, 245, 249);
+      doc.rect(marginX, y, tableWidth, headerH, "F");
+
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(marginX, y, tableWidth, headerH);
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8.5);
+
+      let x = marginX;
+      headers.forEach((header, idx) => {
+        doc.text(header, x + 1.5, y + 5.2);
+        x += colWidths[idx];
+        if (idx < headers.length - 1) {
+          doc.line(x, y, x, y + headerH);
+        }
+      });
+
+      y += headerH;
+    }
+
+    function drawRow(item: DevelopmentMilestone, index: number) {
+      const mark = marks[item.id] ?? { acquired: false, acquiredMonth: "" };
+      const status = getStatus(item, mark);
+      const faixa = `${item.minMonth}-${item.maxMonth}m`;
+      const adquiriu = mark.acquired ? "Sim" : "Não";
+      const idade = mark.acquiredMonth || "-";
+
+      const marcoLines = doc.splitTextToSize(`${index + 1}. ${item.title}`, colWidths[0] - 3);
+      const statusLines = doc.splitTextToSize(status.label, colWidths[4] - 3);
+      const lineCount = Math.max(marcoLines.length, statusLines.length, 1);
+      const rowH = lineCount * lineHeight + rowPaddingY * 2;
+
+      if (y + rowH > pageHeight - 14) {
+        doc.addPage();
+        y = 14;
+        drawTableHeader();
+      }
+
+      if (status.label === "Adequado") {
+        doc.setFillColor(240, 253, 244);
+        doc.rect(marginX, y, tableWidth, rowH, "F");
+      } else if (status.label === "Fora da faixa") {
+        doc.setFillColor(254, 242, 242);
+        doc.rect(marginX, y, tableWidth, rowH, "F");
+      } else {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(marginX, y, tableWidth, rowH, "F");
+      }
+
+      doc.setDrawColor(226, 232, 240);
+      doc.rect(marginX, y, tableWidth, rowH);
+
+      let x = marginX;
+      for (let i = 0; i < colWidths.length - 1; i += 1) {
+        x += colWidths[i];
+        doc.line(x, y, x, y + rowH);
+      }
+
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.3);
+
+      const textY = y + rowPaddingY + lineHeight - 0.5;
+
+      doc.text(marcoLines, marginX + 1.5, textY);
+      doc.text(faixa, marginX + colWidths[0] + 1.5, textY);
+      doc.text(adquiriu, marginX + colWidths[0] + colWidths[1] + 1.5, textY);
+      doc.text(idade, marginX + colWidths[0] + colWidths[1] + colWidths[2] + 1.5, textY);
+      doc.text(statusLines, marginX + colWidths[0] + colWidths[1] + colWidths[2] + colWidths[3] + 1.5, textY);
+
+      y += rowH;
+    }
+
+    drawTopHeader();
+    drawSummaryCards();
+    drawLegend();
+    drawTableHeader();
+
+    visibleMilestones.forEach((item, index) => {
+      drawRow(item, index);
+    });
+
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text("Uso clínico de apoio. Correlacionar com exame pediátrico completo.", marginX, pageHeight - 7);
+
+    return doc.output("blob");
+  }
+
+  async function handleGeneratePdf() {
+    if (!selectedChild) {
+      alert("Selecione um paciente.");
+      return;
+    }
+
+    setGenerating(true);
+    try {
+      const blob = buildPdfBlob();
+      const fileName = `desenvolvimento_${selectedChild.id}_${Date.now()}.pdf`;
+      const filePath = `${selectedChild.id}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("child-docs")
+        .upload(filePath, blob, { contentType: "application/pdf", upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from("child-docs").getPublicUrl(filePath);
+      setPdfUrl(data.publicUrl);
+
+      const localUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = localUrl;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(localUrl);
+
+      alert("PDF de desenvolvimento gerado com sucesso.");
+    } catch (err: any) {
+      alert(`Erro ao gerar PDF: ${err?.message || "desconhecido"}`);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 grid gap-4">
+      <Card>
+        <div className="p-5 grid gap-4">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Marcos do desenvolvimento</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Marque os marcos adquiridos na idade (em meses) e gere o PDF para envio ao responsável.
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <Select
+              label="Paciente"
+              value={patientId}
+              onChange={setPatientId}
+              options={
+                children.length === 0
+                  ? [{ label: loadingChildren ? "Carregando..." : "Nenhuma criança cadastrada", value: "" }]
+                  : children.map((c) => ({ label: c.name, value: c.id }))
+              }
+            />
+            <Input label="Data da avaliação" value={evalDate} onChange={setEvalDate} type="date" />
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-4">
+            <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800 ring-1 ring-emerald-200">
+              <b>Adequados:</b> {summary.adequate}
+            </div>
+            <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800 ring-1 ring-rose-200">
+              <b>Fora da faixa:</b> {summary.outOfRange}
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700 ring-1 ring-slate-200">
+              <b>Pendentes:</b> {summary.pending}
+            </div>
+            <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-800 ring-1 ring-blue-200">
+              <b>Idade atual:</b> {ageMonths == null ? "—" : `${ageMonths} meses`}
+            </div>
+          </div>
+
+          <div className="text-xs text-slate-500">
+            Mostrando {visibleMilestones.length} marcos até a idade correspondente
+            {ageMonths == null ? " do paciente" : ` (${ageMonths} meses)`}.
+          </div>
+
+          <div className="overflow-auto rounded-xl ring-1 ring-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Marco</th>
+                  <th className="px-3 py-2 text-left">Faixa esperada</th>
+                  <th className="px-3 py-2 text-left">Adquiriu</th>
+                  <th className="px-3 py-2 text-left">Idade (meses)</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleMilestones.map((item) => {
+                  const mark = marks[item.id] ?? { acquired: false, acquiredMonth: "" };
+                  const status = getStatus(item, mark);
+
+                  return (
+                    <tr key={item.id} className="border-t border-slate-100 align-top">
+                      <td className="px-3 py-2 min-w-[320px]">
+                        <div className="font-semibold text-slate-900">{item.title}</div>
+                        <div className="text-xs text-slate-600 mt-1">{item.howTo}</div>
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {item.minMonth}-{item.maxMonth} meses
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={mark.acquired}
+                          onChange={(e) =>
+                            updateMark(item.id, {
+                              acquired: e.target.checked,
+                              acquiredMonth: e.target.checked ? mark.acquiredMonth : "",
+                            })
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="number"
+                          min={0}
+                          max={24}
+                          value={mark.acquiredMonth}
+                          onChange={(e) =>
+                            updateMark(item.id, {
+                              acquiredMonth: e.target.value,
+                              acquired: e.target.value.trim() ? true : mark.acquired,
+                            })
+                          }
+                          className="w-24 rounded-lg border border-slate-300 px-2 py-1"
+                          placeholder="0"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={cn("inline-flex rounded-lg px-2 py-1 text-xs font-semibold", status.className)}>
+                          {status.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <Input
+              label="Telefone (WhatsApp)"
+              value={sendPhone}
+              onChange={setSendPhone}
+              placeholder="(DDD) 99999-9999"
+            />
+            <Input
+              label="E-mail do responsável"
+              value={sendEmail}
+              onChange={setSendEmail}
+              type="email"
+              placeholder="responsavel@exemplo.com"
+            />
+          </div>
+
+          <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 break-all">
+            <b>Link do PDF:</b> {pdfUrl || "Gere o PDF para criar o link."}
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button onClick={handleGeneratePdf} disabled={generating || !patientId}>
+              {generating ? "Gerando PDF..." : "Gerar PDF"}
+            </Button>
+
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                if (!pdfUrl) {
+                  alert("Gere o PDF antes de copiar o link.");
+                  return;
+                }
+                try {
+                  await navigator.clipboard.writeText(pdfUrl);
+                  alert("Link copiado!");
+                } catch {
+                  alert("Não consegui copiar automaticamente.");
+                }
+              }}
+              disabled={!pdfUrl}
+            >
+              Copiar link
+            </Button>
+
+            <Button
+              variant="secondary"
+              onClick={() => handleSendWhatsAppConsult(pdfUrl, `desenvolvimento de ${selectedChild?.name || "paciente"}`, sendPhone)}
+              disabled={!pdfUrl}
+            >
+              Enviar por WhatsApp
+            </Button>
+
+            <Button
+              onClick={() => handleSendEmailConsult(pdfUrl, `desenvolvimento de ${selectedChild?.name || "paciente"}`, sendEmail)}
+              disabled={!pdfUrl}
+            >
+              Enviar por e-mail
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function DoctorVaccineTracker({ doctorEmail }: { doctorEmail: string }) {
+  const [children, setChildren] = useState<Child[]>([]);
+  const [loadingChildren, setLoadingChildren] = useState(false);
+  const [patientId, setPatientId] = useState("");
+  const [marks, setMarks] = useState<Record<string, VaccineMark>>({});
+  const [pdfUrl, setPdfUrl] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [sendPhone, setSendPhone] = useState("");
+  const [sendEmail, setSendEmail] = useState("");
+
+  const doctorPdf = useMemo(() => getDoctorPdfSettings(doctorEmail), [doctorEmail]);
+
+  const selectedChild = useMemo(
+    () => children.find((c) => c.id === patientId) ?? null,
+    [children, patientId]
+  );
+
+  useEffect(() => {
+    const initial: Record<string, VaccineMark> = {};
+    VACCINE_SCHEDULE.forEach((item) => {
+      initial[item.id] = { done: false };
+    });
+    setMarks(initial);
+  }, []);
+
+  useEffect(() => {
+    setSendPhone(selectedChild?.guardianPhone ?? "");
+    setSendEmail(selectedChild?.guardianEmail ?? "");
+  }, [selectedChild?.guardianPhone, selectedChild?.guardianEmail]);
+
+  async function loadChildren() {
+    setLoadingChildren(true);
+    try {
+      let data: any[] | null = null;
+      let error: any = null;
+
+      ({ data, error } = await supabase
+        .from("children")
+        .select("id,name,birth_date,sex,guardian_email,guardian_phone")
+        .order("created_at", { ascending: false }));
+
+      if (error && /guardian_email|guardian_phone/i.test(String(error.message || ""))) {
+        ({ data, error } = await supabase
+          .from("children")
+          .select("id,name,birth_date,sex")
+          .order("created_at", { ascending: false }));
+      }
+
+      if (error) throw error;
+
+      const mapped: Child[] = (data ?? []).map((row: any) => ({
+        id: String(row.id),
+        name: String(row.name),
+        birthDate: String(row.birth_date || ""),
+        sex: (row.sex as Child["sex"]) ?? "O",
+        guardianEmail: row.guardian_email ? String(row.guardian_email) : null,
+        guardianPhone: row.guardian_phone ? String(row.guardian_phone) : null,
+      }));
+
+      setChildren(mapped);
+      if (!patientId && mapped[0]?.id) {
+        setPatientId(mapped[0].id);
+      }
+    } catch (err: any) {
+      alert(`Erro ao carregar pacientes: ${err?.message || "desconhecido"}`);
+      setChildren([]);
+    } finally {
+      setLoadingChildren(false);
+    }
+  }
+
+  useEffect(() => {
+    loadChildren();
+  }, []);
+
+  const ageMonths = useMemo(() => {
+    if (!selectedChild?.birthDate) return null;
+    const birth = new Date(selectedChild.birthDate);
+    const ref = new Date();
+    if (Number.isNaN(birth.getTime()) || Number.isNaN(ref.getTime())) return null;
+    let months = (ref.getFullYear() - birth.getFullYear()) * 12 + (ref.getMonth() - birth.getMonth());
+    if (ref.getDate() < birth.getDate()) months -= 1;
+    return Math.max(0, months);
+  }, [selectedChild?.birthDate]);
+
+  function getVaccineStatus(item: VaccineScheduleItem, mark: VaccineMark | undefined) {
+    if (mark?.done) {
+      return { label: "Realizada", className: "bg-emerald-100 text-emerald-800" };
+    }
+
+    if (ageMonths == null) {
+      return { label: "Pendente", className: "bg-slate-100 text-slate-700" };
+    }
+
+    if (ageMonths > item.maxMonth) {
+      return { label: "Em atraso", className: "bg-rose-100 text-rose-800" };
+    }
+
+    if (ageMonths >= item.minMonth) {
+      return { label: "Prevista e pendente", className: "bg-amber-100 text-amber-800" };
+    }
+
+    return { label: "Ainda não prevista", className: "bg-blue-100 text-blue-800" };
+  }
+
+  const summary = useMemo(() => {
+    let done = 0;
+    let duePending = 0;
+    let future = 0;
+
+    VACCINE_SCHEDULE.forEach((item) => {
+      const status = getVaccineStatus(item, marks[item.id]);
+      if (status.label === "Realizada") done += 1;
+      else if (status.label === "Prevista e pendente" || status.label === "Em atraso") duePending += 1;
+      else future += 1;
+    });
+
+    return { done, duePending, future };
+  }, [marks, ageMonths]);
+
+  const groupedRows = useMemo(() => {
+    const bySection: Record<VaccineSection, VaccineScheduleItem[]> = {
+      ate12: [],
+      apos12: [],
+      campanhas: [],
+    };
+
+    VACCINE_SCHEDULE.forEach((item) => {
+      bySection[item.section].push(item);
+    });
+
+    return bySection;
+  }, []);
+
+  function updateMark(id: string, patch: Partial<VaccineMark>) {
+    setMarks((prev) => ({
+      ...prev,
+      [id]: {
+        done: prev[id]?.done ?? false,
+        ...patch,
+      },
+    }));
+  }
+
+  function buildPdfBlob() {
+    if (!selectedChild) throw new Error("Selecione um paciente.");
+    const child = selectedChild;
+
+    const pdfMaxMonth = ageMonths == null ? Number.POSITIVE_INFINITY : ageMonths + 3;
+    const pdfRows: Record<VaccineSection, VaccineScheduleItem[]> = {
+      ate12: groupedRows.ate12.filter((item) => item.minMonth <= pdfMaxMonth),
+      apos12: groupedRows.apos12.filter((item) => item.minMonth <= pdfMaxMonth),
+      campanhas: groupedRows.campanhas.filter((item) => item.minMonth <= pdfMaxMonth),
+    };
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const marginX = 10;
+    const tableWidth = pageWidth - marginX * 2;
+    const colWidths = [74, 30, 24, 52];
+    const lineHeight = 4.2;
+    let y = 12;
+
+    function ensurePage(nextHeight: number) {
+      if (y + nextHeight <= pageHeight - 12) return;
+      doc.addPage();
+      y = 12;
+      drawTableHeader();
+    }
+
+    function drawTableHeader() {
+      doc.setFillColor(241, 245, 249);
+      doc.rect(marginX, y, tableWidth, 8, "F");
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(marginX, y, tableWidth, 8);
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8.3);
+
+      const headers = ["Vacina", "Dose", "Faixa", "Status"];
+      let x = marginX;
+      headers.forEach((header, idx) => {
+        doc.text(header, x + 1.3, y + 5.1);
+        x += colWidths[idx];
+        if (idx < headers.length - 1) {
+          doc.line(x, y, x, y + 8);
+        }
+      });
+
+      y += 8;
+    }
+
+    function drawSectionTitle(title: string) {
+      ensurePage(9);
+      doc.setFillColor(226, 232, 240);
+      doc.rect(marginX, y, tableWidth, 7, "F");
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(marginX, y, tableWidth, 7);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8.6);
+      doc.setTextColor(30, 41, 59);
+      doc.text(title, marginX + 1.6, y + 4.8);
+      y += 7;
+      doc.setTextColor(15, 23, 42);
+    }
+
+    function drawRow(item: VaccineScheduleItem, index: number) {
+      const mark = marks[item.id] ?? { done: false };
+      const status = getVaccineStatus(item, mark);
+      const faixa = `${item.minMonth}-${item.maxMonth}m`;
+
+      const vaccineText = `${index + 1}. ${item.vaccine}`;
+      const vaccineLines = doc.splitTextToSize(vaccineText, colWidths[0] - 3);
+      const statusLines = doc.splitTextToSize(status.label, colWidths[3] - 3);
+      const rowLines = Math.max(vaccineLines.length, statusLines.length, 1);
+      const rowHeight = rowLines * lineHeight + 5;
+
+      ensurePage(rowHeight);
+
+      if (status.label === "Realizada") {
+        doc.setFillColor(240, 253, 244);
+      } else if (status.label === "Prevista e pendente" || status.label === "Em atraso") {
+        doc.setFillColor(254, 242, 242);
+      } else {
+        doc.setFillColor(248, 250, 252);
+      }
+      doc.rect(marginX, y, tableWidth, rowHeight, "F");
+
+      doc.setDrawColor(226, 232, 240);
+      doc.rect(marginX, y, tableWidth, rowHeight);
+
+      let x = marginX;
+      for (let i = 0; i < colWidths.length - 1; i += 1) {
+        x += colWidths[i];
+        doc.line(x, y, x, y + rowHeight);
+      }
+
+      const textY = y + 4;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.text(vaccineLines, marginX + 1.4, textY);
+      doc.text(item.dose, marginX + colWidths[0] + 1.4, textY);
+      doc.text(faixa, marginX + colWidths[0] + colWidths[1] + 1.4, textY);
+      doc.text(statusLines, marginX + colWidths[0] + colWidths[1] + colWidths[2] + 1.4, textY);
+
+      y += rowHeight;
+    }
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text(doctorPdf.doctorName, marginX, y);
+    y += 5;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(`${doctorPdf.specialty} • ${doctorPdf.registration}`, marginX, y, { maxWidth: pageWidth - marginX * 2 });
+    y += 4.5;
+    doc.text(`${doctorPdf.clinicName} • ${doctorPdf.clinicPhone}`, marginX, y, { maxWidth: pageWidth - marginX * 2 });
+    y += 6;
+
+    doc.setLineWidth(0.3);
+    doc.line(marginX, y, pageWidth - marginX, y);
+    y += 7;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text("Registro de Vacinação", pageWidth / 2, y, { align: "center" });
+    y += 6;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.text(`Paciente: ${child.name}`, marginX, y);
+    y += 6;
+    doc.text(`Idade atual: ${ageMonths != null ? `${ageMonths} meses` : "—"}`, marginX, y);
+    y += 6;
+
+    doc.setFontSize(9);
+    doc.text(`Resumo: Realizadas ${summary.done} • Previstas pendentes ${summary.duePending} • Futuras ${summary.future}`, marginX, y);
+    y += 6;
+    doc.text(
+      ageMonths == null
+        ? "Recorte do PDF: todas as faixas etárias."
+        : `Recorte do PDF: vacinas previstas até ${ageMonths + 3} meses.`,
+      marginX,
+      y
+    );
+    y += 6;
+
+    drawTableHeader();
+    let rowIndex = 0;
+
+    if (pdfRows.ate12.length > 0) {
+      drawSectionTitle("Até 12 meses");
+      pdfRows.ate12.forEach((item) => {
+        drawRow(item, rowIndex);
+        rowIndex += 1;
+      });
+    }
+
+    if (pdfRows.apos12.length > 0) {
+      drawSectionTitle("A partir de 12 meses");
+      pdfRows.apos12.forEach((item) => {
+        drawRow(item, rowIndex);
+        rowIndex += 1;
+      });
+    }
+
+    if (pdfRows.campanhas.length > 0) {
+      drawSectionTitle("Outras vacinas e campanhas");
+      pdfRows.campanhas.forEach((item) => {
+        drawRow(item, rowIndex);
+        rowIndex += 1;
+      });
+    }
+
+    if (rowIndex === 0) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.text("Nenhuma vacina encontrada dentro do recorte de idade deste PDF.", marginX, y);
+    }
+
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text("Documento de apoio. Confirmar condutas com calendário vigente do PNI e avaliação clínica.", marginX, pageHeight - 7);
+
+    return doc.output("blob");
+  }
+
+  async function handleGeneratePdf() {
+    if (!selectedChild) {
+      alert("Selecione um paciente.");
+      return;
+    }
+
+    setGenerating(true);
+    try {
+      const blob = buildPdfBlob();
+      const fileName = `vacinas_${selectedChild.id}_${Date.now()}.pdf`;
+      const filePath = `${selectedChild.id}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("child-docs")
+        .upload(filePath, blob, { contentType: "application/pdf", upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from("child-docs").getPublicUrl(filePath);
+      setPdfUrl(data.publicUrl);
+
+      const localUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = localUrl;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(localUrl);
+
+      alert("PDF de vacinas gerado com sucesso.");
+    } catch (err: any) {
+      alert(`Erro ao gerar PDF: ${err?.message || "desconhecido"}`);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 grid gap-4">
+      <Card>
+        <div className="p-5 grid gap-4">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Registro de vacinas</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Marque as vacinas já realizadas e destaque automaticamente as previstas para a idade e ainda pendentes.
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-1">
+            <Select
+              label="Paciente"
+              value={patientId}
+              onChange={setPatientId}
+              options={
+                children.length === 0
+                  ? [{ label: loadingChildren ? "Carregando..." : "Nenhuma criança cadastrada", value: "" }]
+                  : children.map((c) => ({ label: c.name, value: c.id }))
+              }
+            />
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-4">
+            <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800 ring-1 ring-emerald-200">
+              <b>Realizadas:</b> {summary.done}
+            </div>
+            <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800 ring-1 ring-rose-200">
+              <b>Previstas pendentes:</b> {summary.duePending}
+            </div>
+            <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-800 ring-1 ring-blue-200">
+              <b>Futuras:</b> {summary.future}
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700 ring-1 ring-slate-200">
+              <b>Idade atual:</b> {ageMonths == null ? "—" : `${ageMonths} meses`}
+            </div>
+          </div>
+
+          <div className="overflow-auto rounded-xl ring-1 ring-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Vacina</th>
+                  <th className="px-3 py-2 text-left">Dose</th>
+                  <th className="px-3 py-2 text-left">Faixa prevista</th>
+                  <th className="px-3 py-2 text-left">Realizada</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {([
+                  { key: "ate12", title: "Até 12 meses" },
+                  { key: "apos12", title: "A partir de 12 meses" },
+                  { key: "campanhas", title: "Outras vacinas e campanhas" },
+                ] as Array<{ key: VaccineSection; title: string }>).map((section) => (
+                  <React.Fragment key={section.key}>
+                    <tr className="border-t border-slate-200 bg-slate-100">
+                      <td className="px-3 py-2 text-xs font-bold uppercase text-slate-700" colSpan={5}>
+                        {section.title}
+                      </td>
+                    </tr>
+
+                    {groupedRows[section.key].map((item) => {
+                      const mark = marks[item.id] ?? { done: false };
+                      const status = getVaccineStatus(item, mark);
+
+                      const highlightClass =
+                        status.label === "Em atraso" || status.label === "Prevista e pendente"
+                          ? "bg-rose-50"
+                          : status.label === "Realizada"
+                            ? "bg-emerald-50"
+                            : "bg-white";
+
+                      return (
+                        <tr key={item.id} className={cn("border-t border-slate-100 align-top", highlightClass)}>
+                          <td className="px-3 py-2 min-w-[260px] font-semibold text-slate-900">{item.vaccine}</td>
+                          <td className="px-3 py-2 whitespace-nowrap">{item.dose}</td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {item.minMonth}-{item.maxMonth} meses
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={mark.done}
+                              onChange={(e) =>
+                                updateMark(item.id, {
+                                  done: e.target.checked,
+                                })
+                              }
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={cn("inline-flex rounded-lg px-2 py-1 text-xs font-semibold", status.className)}>
+                              {status.label}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <Input
+              label="Telefone (WhatsApp)"
+              value={sendPhone}
+              onChange={setSendPhone}
+              placeholder="(DDD) 99999-9999"
+            />
+            <Input
+              label="E-mail do responsável"
+              value={sendEmail}
+              onChange={setSendEmail}
+              type="email"
+              placeholder="responsavel@exemplo.com"
+            />
+          </div>
+
+          <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 break-all">
+            <b>Link do PDF:</b> {pdfUrl || "Gere o PDF para criar o link."}
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button onClick={handleGeneratePdf} disabled={generating || !patientId}>
+              {generating ? "Gerando PDF..." : "Gerar PDF"}
+            </Button>
+
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                if (!pdfUrl) {
+                  alert("Gere o PDF antes de copiar o link.");
+                  return;
+                }
+                try {
+                  await navigator.clipboard.writeText(pdfUrl);
+                  alert("Link copiado!");
+                } catch {
+                  alert("Não consegui copiar automaticamente.");
+                }
+              }}
+              disabled={!pdfUrl}
+            >
+              Copiar link
+            </Button>
+
+            <Button
+              variant="secondary"
+              onClick={() => handleSendWhatsAppConsult(pdfUrl, `vacinas de ${selectedChild?.name || "paciente"}`, sendPhone)}
+              disabled={!pdfUrl}
+            >
+              Enviar por WhatsApp
+            </Button>
+
+            <Button
+              onClick={() => handleSendEmailConsult(pdfUrl, `vacinas de ${selectedChild?.name || "paciente"}`, sendEmail)}
+              disabled={!pdfUrl}
+            >
+              Enviar por e-mail
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function DoctorGrowthDashboard() {
+  const [children, setChildren] = useState<Child[]>([]);
+  const [loadingChildren, setLoadingChildren] = useState(false);
+  const [patientId, setPatientId] = useState("");
+  const [loadingGrowth, setLoadingGrowth] = useState(false);
+  const [errorGrowth, setErrorGrowth] = useState<string | null>(null);
+  const [rows, setRows] = useState<
+    Array<{
+      dateISO: string;
+      ageMonths: number;
+      weightKg: number | null;
+      heightCm: number | null;
+      headCm: number | null;
+    }>
+  >([]);
+
+  const selectedChild = useMemo(
+    () => children.find((c) => c.id === patientId) ?? null,
+    [children, patientId]
+  );
+
+  async function loadChildren() {
+    setLoadingChildren(true);
+    try {
+      const { data, error } = await supabase
+        .from("children")
+        .select("id,name,birth_date,sex")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const mapped: Child[] = (data ?? []).map((row: any) => ({
+        id: String(row.id),
+        name: String(row.name),
+        birthDate: String(row.birth_date || ""),
+        sex: (row.sex as Child["sex"]) ?? "O",
+      }));
+
+      setChildren(mapped);
+      if (!patientId && mapped[0]?.id) {
+        setPatientId(mapped[0].id);
+      }
+    } catch (err: any) {
+      alert(`Erro ao carregar pacientes: ${err?.message || "desconhecido"}`);
+      setChildren([]);
+    } finally {
+      setLoadingChildren(false);
+    }
+  }
+
+  async function loadGrowthData(childId: string) {
+    if (!childId) {
+      setRows([]);
+      setErrorGrowth("Selecione um paciente.");
+      return;
+    }
+
+    setLoadingGrowth(true);
+    setErrorGrowth(null);
+    try {
+      let data: any[] | null = null;
+      let error: any = null;
+
+      ({ data, error } = await supabase
+        .from("growth_records")
+        .select("date,weight_kg,height_cm,head_cm")
+        .eq("child_id", childId)
+        .order("date", { ascending: true }));
+
+      if (error && /head_cm/i.test(String(error.message || ""))) {
+        ({ data, error } = await supabase
+          .from("growth_records")
+          .select("date,weight_kg,height_cm")
+          .eq("child_id", childId)
+          .order("date", { ascending: true }));
+      }
+
+      if (error) throw error;
+
+      const child = children.find((c) => c.id === childId);
+      const birthDate = child?.birthDate || "";
+
+      const mapped = (data ?? []).map((r: any) => ({
+        dateISO: String(r.date || "").slice(0, 10),
+        ageMonths: (() => {
+          if (!birthDate || !r.date) return 0;
+          const birth = new Date(String(birthDate));
+          const ref = new Date(String(r.date));
+          if (Number.isNaN(birth.getTime()) || Number.isNaN(ref.getTime())) return 0;
+          let months = (ref.getFullYear() - birth.getFullYear()) * 12 + (ref.getMonth() - birth.getMonth());
+          if (ref.getDate() < birth.getDate()) months -= 1;
+          return Math.max(0, Math.min(24, months));
+        })(),
+        weightKg: r.weight_kg == null ? null : Number(r.weight_kg),
+        heightCm: r.height_cm == null ? null : Number(r.height_cm),
+        headCm: r.head_cm == null ? null : Number(r.head_cm),
+      }));
+
+      setRows(mapped);
+      if (mapped.length === 0) {
+        setErrorGrowth("Nenhum dado de crescimento registrado para este paciente.");
+      }
+    } catch (err: any) {
+      setRows([]);
+      setErrorGrowth(err?.message || "Falha ao carregar crescimento.");
+    } finally {
+      setLoadingGrowth(false);
+    }
+  }
+
+  useEffect(() => {
+    loadChildren();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!patientId) return;
+    loadGrowthData(patientId);
+  }, [patientId, children]);
+
+  const sexKey: GrowthSexKey = selectedChild?.sex === "F" ? "F" : "M";
+
+  const chartBaseAges = useMemo(() => {
+    const patientAges = rows.map((r) => r.ageMonths).filter((v) => Number.isFinite(v));
+    const refAges = Array.from({ length: 25 }, (_, idx) => idx);
+    return Array.from(new Set([...refAges, ...patientAges])).sort((a, b) => a - b);
+  }, [rows]);
+
+  function buildChartData(metric: GrowthCurveMetric) {
+    return chartBaseAges.map((age) => {
+      const patientRow = rows.find((r) => r.ageMonths === age);
+      const patientValue =
+        metric === "weight" ? patientRow?.weightKg : metric === "height" ? patientRow?.heightCm : patientRow?.headCm;
+
+      return {
+        ageMonths: age,
+        patient: patientValue ?? null,
+        z3: interpolateWhoCurve(metric, sexKey, age, "z3"),
+        z2: interpolateWhoCurve(metric, sexKey, age, "z2"),
+        z1: interpolateWhoCurve(metric, sexKey, age, "z1"),
+        z0: interpolateWhoCurve(metric, sexKey, age, "z0"),
+        zm1: interpolateWhoCurve(metric, sexKey, age, "zm1"),
+        zm2: interpolateWhoCurve(metric, sexKey, age, "zm2"),
+        zm3: interpolateWhoCurve(metric, sexKey, age, "zm3"),
+      };
+    });
+  }
+
+  const heightChartData = useMemo(() => buildChartData("height"), [chartBaseAges, rows, sexKey]);
+  const weightChartData = useMemo(() => buildChartData("weight"), [chartBaseAges, rows, sexKey]);
+  const headChartData = useMemo(() => buildChartData("head"), [chartBaseAges, rows, sexKey]);
+
+  function hasPatientSeries(data: Array<{ patient: number | null }>) {
+    return data.some((item) => item.patient != null);
+  }
+
+  function renderWhoChart(
+    title: string,
+    unit: string,
+    data: Array<{
+      ageMonths: number;
+      patient: number | null;
+      z3: number | null;
+      z2: number | null;
+      z1: number | null;
+      z0: number | null;
+      zm1: number | null;
+      zm2: number | null;
+      zm3: number | null;
+    }>,
+    includeZ1: boolean
+  ) {
+    return (
+      <div className="rounded-xl ring-1 ring-slate-200 p-3">
+        <div className="text-sm font-semibold text-slate-900 mb-1">{title}</div>
+        <div className="text-xs text-slate-500 mb-2">Curvas OMS aproximadas (escore-z) + linha do paciente</div>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <ReLineChart data={data}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="ageMonths" ticks={[0, 3, 6, 9, 12, 15, 18, 21, 24]} />
+              <YAxis />
+              <Tooltip
+                formatter={(value: any, name?: string) => {
+                  if (value == null) return ["-", String(name ?? "")];
+                  return [Number(value).toFixed(2) + ` ${unit}`, String(name ?? "")];
+                }}
+                labelFormatter={(label) => `Idade: ${label} meses`}
+              />
+              <Legend />
+
+              <Line type="monotone" dataKey="z3" name="+3" stroke="#111827" strokeWidth={1.2} dot={false} connectNulls />
+              <Line type="monotone" dataKey="z2" name="+2" stroke="#e11d48" strokeWidth={1.1} dot={false} connectNulls />
+              {includeZ1 ? <Line type="monotone" dataKey="z1" name="+1" stroke="#f97316" strokeWidth={1.1} dot={false} connectNulls /> : null}
+              <Line type="monotone" dataKey="z0" name="0" stroke="#16a34a" strokeWidth={1.2} dot={false} connectNulls />
+              {includeZ1 ? <Line type="monotone" dataKey="zm1" name="-1" stroke="#f97316" strokeWidth={1.1} dot={false} connectNulls /> : null}
+              <Line type="monotone" dataKey="zm2" name="-2" stroke="#e11d48" strokeWidth={1.1} dot={false} connectNulls />
+              <Line type="monotone" dataKey="zm3" name="-3" stroke="#111827" strokeWidth={1.2} dot={false} connectNulls />
+
+              <Line
+                type="monotone"
+                dataKey="patient"
+                name="Paciente"
+                stroke="#2563eb"
+                strokeWidth={2.2}
+                dot={{ r: 3 }}
+                activeDot={{ r: 6 }}
+                connectNulls
+              />
+            </ReLineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    );
+  }
+
+  const hasAnyPatientData = hasPatientSeries(heightChartData) || hasPatientSeries(weightChartData) || hasPatientSeries(headChartData);
+
+  return (
+    <div className="mt-5 grid gap-4">
+      <Card>
+        <div className="p-5 grid gap-4">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Gráficos de crescimento (OMS)</div>
+            <div className="mt-1 text-sm text-slate-500">Baseado em curvas por idade (0 a 24 meses) com plot da criança.</div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-1">
+            <Select
+              label="Paciente"
+              value={patientId}
+              onChange={setPatientId}
+              options={
+                children.length === 0
+                  ? [{ label: loadingChildren ? "Carregando..." : "Nenhuma criança cadastrada", value: "" }]
+                  : children.map((c) => ({ label: c.name, value: c.id }))
+              }
+            />
+          </div>
+
+          {selectedChild ? (
+            <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
+              <b>Paciente:</b> {selectedChild.name} • <b>Sexo:</b> {selectedChild.sex}
+            </div>
+          ) : null}
+
+          {loadingGrowth ? (
+            <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">Carregando gráficos...</div>
+          ) : errorGrowth ? (
+            <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800 ring-1 ring-amber-200">{errorGrowth}</div>
+          ) : !hasAnyPatientData ? (
+            <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">Sem medidas suficientes para plotar a linha do paciente.</div>
+          ) : (
+            <div className="grid gap-4">
+              {renderWhoChart("Estatura para idade (0-24 meses)", "cm", heightChartData, false)}
+              {renderWhoChart("Peso para idade (0-24 meses)", "kg", weightChartData, false)}
+              {renderWhoChart("Perímetro cefálico para idade (0-24 meses)", "cm", headChartData, true)}
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function DoctorMedicineFinder() {
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<MedicineSearchPayload | null>(null);
+
+  async function searchMedicine() {
+    const q = query.trim();
+    if (!q) {
+      alert("Digite o nome do medicamento.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/medicine-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Falha ao pesquisar medicamento");
+      }
+
+      setResult(data as MedicineSearchPayload);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "erro desconhecido";
+      setError(msg);
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 grid gap-4">
+      <Card>
+        <div className="p-5 grid gap-4">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Pesquisa de medicamentos</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Compare preços apenas em Drogasil e Pague Menos e acesse a bula do medicamento.
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+            <Input
+              label="Medicamento"
+              value={query}
+              onChange={setQuery}
+              placeholder="Ex.: amoxicilina 500mg"
+            />
+            <div className="md:pt-6">
+              <Button onClick={searchMedicine} disabled={loading || !query.trim()}>
+                {loading ? "Pesquisando..." : "Pesquisar"}
+              </Button>
+            </div>
+          </div>
+
+          {error ? (
+            <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800 ring-1 ring-rose-200">
+              {error}
+            </div>
+          ) : null}
+
+          {result ? (
+            <div className="grid gap-4">
+              {result.priceWarning ? (
+                <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
+                  {result.priceWarning}
+                </div>
+              ) : null}
+
+              <div className="rounded-xl bg-emerald-50 p-4 ring-1 ring-emerald-200">
+                <div className="text-xs font-semibold uppercase text-emerald-700">Menor preço (Drogasil/Pague Menos)</div>
+                {result.lowestPrice ? (
+                  <>
+                    <div className="mt-1 text-lg font-bold text-emerald-900">
+                      R$ {result.lowestPrice.price.toFixed(2).replace(".", ",")}
+                    </div>
+                    <div className="text-sm text-emerald-900">{result.lowestPrice.title}</div>
+                    <div className="text-xs text-emerald-700">Loja: {result.lowestPrice.storeName}</div>
+                    <div className="mt-2">
+                      <Button
+                        variant="secondary"
+                        onClick={() => window.open(result.lowestPrice!.url, "_blank")}
+                      >
+                        Abrir oferta
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-1 text-sm text-emerald-900">
+                    Nenhuma oferta com preço foi encontrada para "{result.query}".
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+                <div className="text-sm font-semibold text-slate-900">Bula</div>
+                {result.leaflet ? (
+                  <>
+                    <div className="mt-2 text-sm font-semibold text-slate-800">{result.leaflet.title}</div>
+                    <div className="mt-2 text-sm text-slate-700 whitespace-pre-wrap">
+                      {result.leaflet.summary}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button variant="secondary" onClick={() => window.open(result.leaflet!.sourceUrl, "_blank")}>
+                        Ver fonte da bula
+                      </Button>
+                      <Button variant="secondary" onClick={() => window.open(result.leafletSearchUrl, "_blank")}>
+                        Buscar bula no Brasil
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-2 text-sm text-slate-700">
+                    Não encontrei conteúdo de bula automático para esse termo.
+                    <div className="mt-2">
+                      <Button variant="secondary" onClick={() => window.open(result.leafletSearchUrl, "_blank")}>
+                        Buscar bula no Brasil
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {result.offers.length > 0 ? (
+                <div className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+                  <div className="text-sm font-semibold text-slate-900">Outras ofertas (Drogasil/Pague Menos)</div>
+                  <div className="mt-3 grid gap-2">
+                    {result.offers.slice(0, 5).map((offer, idx) => (
+                      <div key={`${offer.url}_${idx}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-2">
+                        <div className="min-w-[220px] flex-1">
+                          <div className="text-sm font-medium text-slate-900">{offer.title}</div>
+                          <div className="text-xs text-slate-600">{offer.storeName}</div>
+                        </div>
+                        <div className="text-sm font-bold text-slate-900">
+                          R$ {offer.price.toFixed(2).replace(".", ",")}
+                        </div>
+                        <Button variant="secondary" onClick={() => window.open(offer.url, "_blank")}>
+                          Abrir
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </Card>
+    </div>
+  );
+}
 
 function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; kind: DoctorDocumentKind }) {
   const [children, setChildren] = useState<Child[]>([]);
@@ -6163,6 +8193,151 @@ async function salvarConsulta() {
   bloco("Exames:", exames);
   bloco("Receituário:", receitas);
   bloco("Retorno:", retorno);
+
+  // Gráfico de crescimento (histórico do paciente) no final da ficha
+  type GrowthRow = {
+    dateISO: string;
+    weightKg: number | null;
+    heightCm: number | null;
+    headCm: number | null;
+  };
+
+  let growthRows: GrowthRow[] = [];
+  try {
+    let data: any[] | null = null;
+    let error: any = null;
+
+    ({ data, error } = await supabase
+      .from("growth_records")
+      .select("date,weight_kg,height_cm,head_cm")
+      .eq("child_id", child.id)
+      .order("date", { ascending: true }));
+
+    if (error && /head_cm/i.test(String(error.message || ""))) {
+      ({ data, error } = await supabase
+        .from("growth_records")
+        .select("date,weight_kg,height_cm")
+        .eq("child_id", child.id)
+        .order("date", { ascending: true }));
+    }
+
+    if (!error) {
+      growthRows = (data ?? []).map((row: any) => ({
+        dateISO: String(row.date || ""),
+        weightKg: row.weight_kg == null ? null : Number(row.weight_kg),
+        heightCm: row.height_cm == null ? null : Number(row.height_cm),
+        headCm: row.head_cm == null ? null : Number(row.head_cm),
+      }));
+    }
+  } catch {
+    growthRows = [];
+  }
+
+  const currentDateISO = date;
+  const currentWeight = weight.trim() ? Number(weight.replace(",", ".")) : null;
+  const currentHeight = height.trim() ? Number(height.replace(",", ".")) : null;
+  const currentHead = headCircumference.trim() ? Number(headCircumference.replace(",", ".")) : null;
+
+  if (currentWeight != null || currentHeight != null || currentHead != null) {
+    growthRows.push({
+      dateISO: currentDateISO,
+      weightKg: Number.isFinite(currentWeight as number) ? currentWeight : null,
+      heightCm: Number.isFinite(currentHeight as number) ? currentHeight : null,
+      headCm: Number.isFinite(currentHead as number) ? currentHead : null,
+    });
+  }
+
+  growthRows = growthRows
+    .filter((row) => !!row.dateISO)
+    .sort((a, b) => new Date(a.dateISO).getTime() - new Date(b.dateISO).getTime());
+
+  function drawMetricChart(title: string, points: Array<{ dateISO: string; value: number }>) {
+    if (points.length === 0) return;
+
+    const chartX = 10;
+    const chartY = y;
+    const chartW = pageWidth - 20;
+    const chartH = 34;
+
+    if (chartY + chartH + 20 > 270) {
+      doc.addPage();
+      y = 18;
+    }
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text(title, chartX, y);
+    y += 3;
+
+    const boxY = y;
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(chartX, boxY, chartW, chartH);
+
+    const values = points.map((p) => p.value);
+    const minV = Math.min(...values);
+    const maxV = Math.max(...values);
+    const range = Math.max(maxV - minV, 1);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(100);
+    doc.text(`${maxV.toFixed(1)}`, chartX + 1, boxY + 3.5);
+    doc.text(`${minV.toFixed(1)}`, chartX + 1, boxY + chartH - 1.5);
+    doc.text(formatDateBR(points[0].dateISO), chartX + 1, boxY + chartH + 4.5);
+    doc.text(formatDateBR(points[points.length - 1].dateISO), chartX + chartW - 1, boxY + chartH + 4.5, {
+      align: "right",
+    });
+
+    const plotLeft = chartX + 12;
+    const plotRight = chartX + chartW - 4;
+    const plotTop = boxY + 2;
+    const plotBottom = boxY + chartH - 3;
+
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.6);
+
+    points.forEach((point, idx) => {
+      const px =
+        points.length === 1
+          ? (plotLeft + plotRight) / 2
+          : plotLeft + (idx / (points.length - 1)) * (plotRight - plotLeft);
+      const normalized = (point.value - minV) / range;
+      const py = plotBottom - normalized * (plotBottom - plotTop);
+
+      if (idx > 0) {
+        const prev = points[idx - 1];
+        const ppx =
+          points.length === 1
+            ? (plotLeft + plotRight) / 2
+            : plotLeft + ((idx - 1) / (points.length - 1)) * (plotRight - plotLeft);
+        const pNorm = (prev.value - minV) / range;
+        const ppy = plotBottom - pNorm * (plotBottom - plotTop);
+        doc.line(ppx, ppy, px, py);
+      }
+
+      doc.circle(px, py, 0.8, "F");
+    });
+
+    doc.setTextColor(0);
+    y = boxY + chartH + 8;
+  }
+
+  const weightPoints = growthRows
+    .filter((row) => row.weightKg != null)
+    .map((row) => ({ dateISO: row.dateISO, value: Number(row.weightKg) }));
+  const heightPoints = growthRows
+    .filter((row) => row.heightCm != null)
+    .map((row) => ({ dateISO: row.dateISO, value: Number(row.heightCm) }));
+  const headPoints = growthRows
+    .filter((row) => row.headCm != null)
+    .map((row) => ({ dateISO: row.dateISO, value: Number(row.headCm) }));
+
+  if (weightPoints.length > 0 || heightPoints.length > 0 || headPoints.length > 0) {
+    y += 2;
+    drawMetricChart("Gráfico de crescimento - Peso (kg)", weightPoints);
+    drawMetricChart("Gráfico de crescimento - Altura (cm)", heightPoints);
+    drawMetricChart("Gráfico de crescimento - Perímetro cefálico (cm)", headPoints);
+  }
  
 
   // Assinatura
