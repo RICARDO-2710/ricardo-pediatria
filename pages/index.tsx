@@ -1617,6 +1617,7 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
   const [dayBusy, setDayBusy] = useState<Record<string, boolean>>({});
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [errSlots, setErrSlots] = useState<string | null>(null);
+  const [bookingSlot, setBookingSlot] = useState<string | null>(null);
 
   // disponibilidade por dia do mês (YYYY-MM-DD -> tem pelo menos 1 horário?)
   const [monthAvail, setMonthAvail] = useState<Record<string, boolean>>({});
@@ -1646,6 +1647,17 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
     const found = doctors.find((d) => d.email === doctorEmail.toLowerCase());
     if (found) return found.name;
     return doctorEmail;
+  }
+
+  function isDuplicateBookingMessage(message: string) {
+    const normalized = (message || "").toLowerCase();
+    return (
+      normalized.includes("não pode ser realizado novamente") ||
+      normalized.includes("nao pode ser realizado novamente") ||
+      normalized.includes("duplicate key") ||
+      normalized.includes("already exists") ||
+      normalized.includes("already booked")
+    );
   }
 
   function displayNameFromEmail(email: string) {
@@ -2118,6 +2130,8 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
   // --- MARCAR CONSULTA ---
 
   async function handleRequest(slot: string) {
+    if (bookingSlot) return;
+    setBookingSlot(slot);
     try {
       if (!selectedDoctorEmail) {
         alert("Selecione o pediatra antes de marcar a consulta.");
@@ -2201,6 +2215,12 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
       }
 
       if (insertError) {
+        if (isDuplicateBookingMessage(insertError.message || "")) {
+          await loadMyAppointments();
+          await loadDayData(selectedDay, viewYear, viewMonth);
+          await loadMonthAvailability(viewYear, viewMonth);
+          return;
+        }
         console.error(insertError);
         alert("Erro ao registrar pedido: " + insertError.message);
         return;
@@ -2213,8 +2233,16 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
       await loadDayData(selectedDay, viewYear, viewMonth);
       await loadMonthAvailability(viewYear, viewMonth);
     } catch (e: any) {
+      if (isDuplicateBookingMessage(e?.message || "")) {
+        await loadMyAppointments();
+        await loadDayData(selectedDay, viewYear, viewMonth);
+        await loadMonthAvailability(viewYear, viewMonth);
+        return;
+      }
       console.error(e);
       alert("Erro inesperado: " + (e?.message ?? "desconhecido"));
+    } finally {
+      setBookingSlot(null);
     }
   }
 
@@ -2426,11 +2454,11 @@ function AppointmentsMock({ user, onBack }: { user: AppUser; onBack: () => void 
                     <button
                       key={s}
                       onClick={() => {
-                        if (!isAvailable || isBusy) return;
+                        if (!isAvailable || isBusy || bookingSlot) return;
                         handleRequest(s);
                       }}
                       className={slotClass}
-                      disabled={!isAvailable || isBusy}
+                      disabled={!isAvailable || isBusy || !!bookingSlot}
                     >
                       {s}
                     </button>
@@ -3450,7 +3478,17 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
 // ---------- Área do Pediatra ----------
 function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void }) {
   // Adicionado "settings" no estado inicial
-  const [tab, setTab] = useState<"patients" | "agenda" | "record" | "availability" | "settings">("patients");
+  const [tab, setTab] = useState<
+    | "patients"
+    | "agenda"
+    | "record"
+    | "availability"
+    | "doc_prescription"
+    | "doc_exam"
+    | "doc_certificate"
+    | "doc_report"
+    | "settings"
+  >("patients");
 
   // estado local para exibir banner de plano
   const [planStatus, setPlanStatus] = useState<string>("Carregando");
@@ -3545,6 +3583,54 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
                   alert("Plano inativo. Ative em Configurações para usar.");
                   return;
                 }
+                setTab("doc_prescription");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "doc_prescription" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <FileText className="inline h-4 w-4 mr-2" /> Receituário
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("doc_exam");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "doc_exam" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <FileText className="inline h-4 w-4 mr-2" /> Solicitação de exames
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("doc_certificate");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "doc_certificate" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <FileText className="inline h-4 w-4 mr-2" /> Atestado
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
+                setTab("doc_report");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "doc_report" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <FileText className="inline h-4 w-4 mr-2" /> Relatório médico
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
                 setTab("availability");
               }}
               className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "availability" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
@@ -3565,6 +3651,10 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
           {tab === "agenda" && <DoctorAppointments />}
           {tab === "availability" && <DoctorAvailability />}
           {tab === "record" && <RecordConsultationMock doctorEmail={user.email} />}
+          {tab === "doc_prescription" && <DoctorDocumentComposer doctorEmail={user.email} kind="prescription" />}
+          {tab === "doc_exam" && <DoctorDocumentComposer doctorEmail={user.email} kind="exam" />}
+          {tab === "doc_certificate" && <DoctorDocumentComposer doctorEmail={user.email} kind="certificate" />}
+          {tab === "doc_report" && <DoctorDocumentComposer doctorEmail={user.email} kind="report" />}
           {tab === "settings" && <DoctorSettings user={user} />}
         </div>
       </Card>
@@ -3573,6 +3663,7 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
 }
 function DoctorSettings({ user }: { user: AppUser }) {
   const [planStatus, setPlanStatus] = useState("Carregando");
+  const [planRenewalDate, setPlanRenewalDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [pdfDoctorName, setPdfDoctorName] = useState("");
   const [pdfRegistration, setPdfRegistration] = useState("");
@@ -3591,9 +3682,11 @@ function DoctorSettings({ user }: { user: AppUser }) {
         });
         const data = await res.json();
         setPlanStatus(data.status ?? "Cancelado");
+        setPlanRenewalDate(data.renewalDate ?? null);
       } catch (err) {
         console.error("failed to load plan status", err);
         setPlanStatus("Cancelado");
+        setPlanRenewalDate(null);
       }
     }
     load();
@@ -3637,6 +3730,7 @@ function DoctorSettings({ user }: { user: AppUser }) {
       }
 
       setPlanStatus("Cancelado");
+      setPlanRenewalDate(null);
       alert("Renovação automática cancelada.");
       window.dispatchEvent(new Event("rbgp_plan_updated"));
     } catch (err) {
@@ -3700,6 +3794,13 @@ function DoctorSettings({ user }: { user: AppUser }) {
           <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
             <span className="text-sm text-slate-600 font-medium">Método de Pagamento</span>
             <span className="text-sm font-bold text-slate-900">Cartão de Crédito</span>
+          </div>
+
+          <div className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-100">
+            <span className="text-sm text-slate-600 font-medium">Renovação da Assinatura</span>
+            <span className="text-sm font-bold text-slate-900">
+              {planRenewalDate ? formatDateBR(planRenewalDate) : "—"}
+            </span>
           </div>
         </div>
 
@@ -4755,8 +4856,369 @@ function DoctorAvailability() {
   );
 }
 
+type DoctorDocumentKind = "prescription" | "exam" | "certificate" | "report";
+
+function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; kind: DoctorDocumentKind }) {
+  const [children, setChildren] = useState<Child[]>([]);
+  const [loadingChildren, setLoadingChildren] = useState(false);
+  const [patientId, setPatientId] = useState("");
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [pdfUrl, setPdfUrl] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [sendPhone, setSendPhone] = useState("");
+  const [sendEmail, setSendEmail] = useState("");
+
+  const kindMeta = useMemo(() => {
+    if (kind === "prescription") {
+      return {
+        tabTitle: "Receituário",
+        defaultTitle: "Receituário médico",
+        pdfHeading: "Receituário",
+        placeholder: "Digite aqui o receituário, medicações e posologia...",
+      };
+    }
+    if (kind === "exam") {
+      return {
+        tabTitle: "Solicitação de exames",
+        defaultTitle: "Solicitação de exames",
+        pdfHeading: "Solicitação de exames",
+        placeholder: "Digite aqui os exames solicitados e justificativa clínica...",
+      };
+    }
+    if (kind === "certificate") {
+      return {
+        tabTitle: "Atestado",
+        defaultTitle: "Atestado médico",
+        pdfHeading: "Atestado",
+        placeholder: "Digite aqui o texto do atestado...",
+      };
+    }
+    return {
+      tabTitle: "Relatório médico",
+      defaultTitle: "Relatório médico",
+      pdfHeading: "Relatório médico",
+      placeholder: "Digite aqui o relatório médico...",
+    };
+  }, [kind]);
+
+  const doctorPdf = useMemo(() => getDoctorPdfSettings(doctorEmail), [doctorEmail]);
+
+  const selectedChild = useMemo(
+    () => children.find((c) => c.id === patientId) ?? null,
+    [children, patientId]
+  );
+
+  useEffect(() => {
+    setTitle(kindMeta.defaultTitle);
+    setContent("");
+    setPdfUrl("");
+  }, [kindMeta.defaultTitle]);
+
+  useEffect(() => {
+    setSendPhone(selectedChild?.guardianPhone ?? "");
+    setSendEmail(selectedChild?.guardianEmail ?? "");
+  }, [selectedChild?.guardianPhone, selectedChild?.guardianEmail]);
+
+  async function loadChildren() {
+    setLoadingChildren(true);
+    try {
+      let data: any[] | null = null;
+      let error: any = null;
+
+      ({ data, error } = await supabase
+        .from("children")
+        .select("id,name,birth_date,sex,guardian_email,guardian_phone")
+        .order("created_at", { ascending: false }));
+
+      if (error && /guardian_email|guardian_phone/i.test(String(error.message || ""))) {
+        ({ data, error } = await supabase
+          .from("children")
+          .select("id,name,birth_date,sex")
+          .order("created_at", { ascending: false }));
+      }
+
+      if (error) throw error;
+
+      const mapped: Child[] = (data ?? []).map((row: any) => ({
+        id: String(row.id),
+        name: String(row.name),
+        birthDate: String(row.birth_date || ""),
+        sex: (row.sex as Child["sex"]) ?? "O",
+        guardianEmail: row.guardian_email ? String(row.guardian_email) : null,
+        guardianPhone: row.guardian_phone ? String(row.guardian_phone) : null,
+      }));
+
+      setChildren(mapped);
+      if (!patientId && mapped[0]?.id) {
+        setPatientId(mapped[0].id);
+      }
+    } catch (err: any) {
+      alert(`Erro ao carregar pacientes: ${err?.message || "desconhecido"}`);
+      setChildren([]);
+    } finally {
+      setLoadingChildren(false);
+    }
+  }
+
+  useEffect(() => {
+    loadChildren();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function normalizePhoneDigits(phone: string) {
+    return (phone || "").replace(/\D/g, "");
+  }
+
+  function buildDocumentPdf(child: Child, documentTitle: string, documentBody: string) {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    let y = 10;
+
+    const headerTop = y;
+    const logoX = 10;
+    const logoY = headerTop;
+    const logoWidth = 18;
+    const logoHeight = 18;
+    const textX = logoX + logoWidth + 4;
+    const textRightPadding = 10;
+    const textWidth = pageWidth - textX - textRightPadding;
+
+    if (doctorPdf.logoBase64 && doctorPdf.logoBase64.length > 0) {
+      const imageFormat = getImageFormatFromBase64(doctorPdf.logoBase64);
+      doc.addImage(doctorPdf.logoBase64, imageFormat, logoX, logoY, logoWidth, logoHeight);
+    }
+
+    const emissionDate = formatDateBR(new Date().toISOString());
+
+    let textY = headerTop + 4;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text(doctorPdf.doctorName, textX, textY);
+
+    textY += 4.5;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(`${doctorPdf.specialty} • ${doctorPdf.registration}`, textX, textY, {
+      maxWidth: textWidth,
+    });
+
+    textY += 4.5;
+    doc.text(doctorPdf.clinicName, textX, textY, { maxWidth: textWidth });
+
+    textY += 4.5;
+    const addressCompact = [doctorPdf.clinicAddress, doctorPdf.clinicPhone]
+      .filter(Boolean)
+      .join(" • ");
+    doc.text(addressCompact, textX, textY, { maxWidth: textWidth });
+
+    doc.setFontSize(8.5);
+    doc.text(`Data: ${emissionDate}`, pageWidth - 10, headerTop + 4, { align: "right" });
+
+    y = Math.max(logoY + logoHeight, textY) + 4;
+
+    doc.setLineWidth(0.3);
+    doc.line(10, y, pageWidth - 10, y);
+    y += 8;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text(documentTitle, pageWidth / 2, y, { align: "center" });
+    y += 10;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.text(`Paciente: ${child.name}`, 10, y);
+    y += 6;
+    const ageAtDoc = child.birthDate ? calcAgeText(child.birthDate, date) : "";
+    doc.text(`Data do documento: ${formatDateBR(date)}${ageAtDoc ? ` • Idade: ${ageAtDoc}` : ""}`, 10, y);
+    y += 10;
+
+    doc.setFont("helvetica", "bold");
+    doc.text(kindMeta.pdfHeading + ":", 10, y);
+    y += 6;
+
+    doc.setFont("helvetica", "normal");
+    const lines = doc.splitTextToSize(documentBody.trim(), pageWidth - 20);
+    doc.text(lines, 10, y);
+    y += lines.length * 5 + 12;
+
+    if (y > 230) {
+      doc.addPage();
+      y = 200;
+    }
+
+    doc.setLineWidth(0.2);
+    doc.line(60, 260, pageWidth - 60, 260);
+    doc.setFontSize(10);
+    doc.text(doctorPdf.doctorName, pageWidth / 2, 266, { align: "center" });
+    doc.text(doctorPdf.registration, pageWidth / 2, 272, { align: "center" });
+
+    return doc.output("blob");
+  }
+
+  async function handleGeneratePdf() {
+    if (!selectedChild) {
+      alert("Selecione um paciente.");
+      return;
+    }
+    if (!content.trim()) {
+      alert("Preencha o texto do documento.");
+      return;
+    }
+
+    const normalizedTitle = title.trim() || kindMeta.defaultTitle;
+    const pdfBlob = buildDocumentPdf(selectedChild, normalizedTitle, content);
+
+    const fileNameSafe = `${kind}_${Date.now()}.pdf`;
+    const filePath = `${selectedChild.id}/${fileNameSafe}`;
+
+    setGenerating(true);
+    try {
+      const { error: uploadError } = await supabase.storage
+        .from("child-docs")
+        .upload(filePath, pdfBlob, { contentType: "application/pdf", upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage.from("child-docs").getPublicUrl(filePath);
+      const publicUrl = urlData.publicUrl;
+      setPdfUrl(publicUrl);
+
+      const localUrl = URL.createObjectURL(pdfBlob);
+      const a = document.createElement("a");
+      a.href = localUrl;
+      a.download = fileNameSafe;
+      a.click();
+      URL.revokeObjectURL(localUrl);
+
+      alert("PDF gerado com sucesso.");
+    } catch (err: any) {
+      alert(`Erro ao gerar/enviar PDF: ${err?.message || "desconhecido"}`);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  function handleSendWhatsApp() {
+    if (!pdfUrl) {
+      alert("Gere o PDF antes de enviar.");
+      return;
+    }
+    const digits = normalizePhoneDigits(sendPhone);
+    const msg = `Olá! Segue o documento (${kindMeta.tabTitle}) de ${selectedChild?.name || "paciente"}: ${pdfUrl}`;
+
+    if (!digits) {
+      const generic = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+      window.open(generic, "_blank");
+      return;
+    }
+
+    const url = `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
+    window.open(url, "_blank");
+  }
+
+  return (
+    <Card>
+      <div className="p-5 grid gap-4">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">{kindMeta.tabTitle}</div>
+          <div className="mt-1 text-sm text-slate-500">
+            Texto simples, geração de PDF e envio rápido por WhatsApp/e-mail.
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <Select
+            label="Paciente"
+            value={patientId}
+            onChange={setPatientId}
+            options={
+              children.length === 0
+                ? [{ label: loadingChildren ? "Carregando..." : "Nenhuma criança cadastrada", value: "" }]
+                : children.map((c) => ({ label: c.name, value: c.id }))
+            }
+          />
+          <Input label="Data" value={date} onChange={setDate} type="date" />
+        </div>
+
+        <Input
+          label="Título do documento"
+          value={title}
+          onChange={setTitle}
+          placeholder={kindMeta.defaultTitle}
+        />
+
+        <TextArea
+          label={kindMeta.tabTitle}
+          value={content}
+          onChange={setContent}
+          placeholder={kindMeta.placeholder}
+        />
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <Input
+            label="Telefone (WhatsApp)"
+            value={sendPhone}
+            onChange={setSendPhone}
+            placeholder="(DDD) 99999-9999"
+          />
+          <Input
+            label="E-mail do responsável"
+            value={sendEmail}
+            onChange={setSendEmail}
+            type="email"
+            placeholder="responsavel@exemplo.com"
+          />
+        </div>
+
+        <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 break-all">
+          <b>Link do PDF:</b> {pdfUrl || "Gere o PDF para criar o link."}
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button onClick={handleGeneratePdf} disabled={generating || !patientId || !content.trim()}>
+            {generating ? "Gerando PDF..." : "Gerar PDF"}
+          </Button>
+
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              if (!pdfUrl) {
+                alert("Gere o PDF antes de copiar o link.");
+                return;
+              }
+              try {
+                await navigator.clipboard.writeText(pdfUrl);
+                alert("Link copiado!");
+              } catch {
+                alert("Não consegui copiar automaticamente.");
+              }
+            }}
+            disabled={!pdfUrl}
+          >
+            Copiar link
+          </Button>
+
+          <Button variant="secondary" onClick={handleSendWhatsApp} disabled={!pdfUrl}>
+            Enviar por WhatsApp
+          </Button>
+
+          <Button
+            onClick={() => handleSendEmailConsult(pdfUrl, selectedChild?.name || "Documento", sendEmail)}
+            disabled={!pdfUrl}
+          >
+            Enviar por e-mail
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function DoctorAppointments() {
-   type AppointmentItem = {
+  type AppointmentItem = {
     id: string;
     childName: string;
     start_at: string;
@@ -4992,6 +5454,7 @@ function RecordConsultationMock({ doctorEmail }: { doctorEmail: string }) {
   const [children, setChildren] = useState<Child[]>([]);
   const [loading, setLoading] = useState(false);
   const [patientId, setPatientId] = useState<string>("");
+  const [patientSearchText, setPatientSearchText] = useState<string>("");
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
 
 const [toast, setToast] = useState<string | null>(null);
@@ -5050,6 +5513,52 @@ const ageText = useMemo(() => {
   if (!selectedChild?.birthDate) return "";
   return calcAgeText(selectedChild.birthDate, date);
 }, [selectedChild?.birthDate, date]);
+
+function normalizeText(value: string) {
+  return (value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+const patientMatches = useMemo(() => {
+  const query = normalizeText(patientSearchText);
+  if (!query) return children;
+  return children.filter((c) => normalizeText(c.name).includes(query));
+}, [children, patientSearchText]);
+
+function handlePatientSearchChange(value: string) {
+  setPatientSearchText(value);
+
+  const query = normalizeText(value);
+  if (!query) {
+    setPatientId("");
+    return;
+  }
+
+  const exact = children.find((c) => normalizeText(c.name) === query);
+  if (exact) {
+    setPatientId(exact.id);
+    return;
+  }
+
+  const partial = children.filter((c) => normalizeText(c.name).includes(query));
+  if (partial.length === 1) {
+    setPatientId(partial[0].id);
+    return;
+  }
+
+  setPatientId("");
+}
+
+useEffect(() => {
+  if (!patientId) return;
+  const current = children.find((c) => c.id === patientId);
+  if (current) {
+    setPatientSearchText(current.name);
+  }
+}, [patientId, children]);
 
 // ✅ 1) Carrega diagnóstico salvo ao trocar de paciente
 useEffect(() => {
@@ -5688,23 +6197,16 @@ async function salvarConsulta() {
         <div className="p-5">
           <div className="text-sm font-semibold text-slate-900">Gravar consulta</div>
           <div className="mt-1 text-sm text-slate-500">
-            Agora salvando de verdade no Supabase (tabela <b>consultations</b>) e,
+            e,
             se preencher peso/altura, também em <b>growth_records</b> para o gráfico de crescimento.
           </div>
 
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-<Select
-  label="Paciente"
-  value={patientId}
-  onChange={setPatientId}
-  options={
-    children.length === 0
-      ? [{ label: "Nenhuma criança cadastrada", value: "" }]
-      : children.map((c) => ({
-          label: c.name,
-          value: c.id,
-        }))
-  }
+<Input
+  label="Paciente (digite o nome)"
+  value={patientSearchText}
+  onChange={handlePatientSearchChange}
+  placeholder={children.length === 0 ? "Nenhuma criança cadastrada" : "Ex.: Maria"}
 />
 <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 p-3">
   <div className="text-sm text-slate-700">
@@ -5739,6 +6241,13 @@ async function salvarConsulta() {
               type="date"
             />
           </div>
+          {patientSearchText.trim() && !selectedChild ? (
+            <div className="mt-2 rounded-xl bg-amber-50 p-2 text-xs text-amber-800">
+              {patientMatches.length === 0
+                ? "Nenhum paciente encontrado com esse nome."
+                : `Foram encontrados ${patientMatches.length} pacientes. Digite mais para selecionar 1.`}
+            </div>
+          ) : null}
 {selectedChild && (
   <div className="mt-2 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
     <div><b>Paciente:</b> {selectedChild.name}</div>
