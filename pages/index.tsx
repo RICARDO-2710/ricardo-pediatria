@@ -897,7 +897,7 @@ function GuardianHome({
   user: AppUser;
   onLogout: () => void;
 }) {
-  const [tab, setTab] = useState<"home" | "children" | "appointments" | "questions" | "docs">(
+  const [tab, setTab] = useState<"home" | "children" | "appointments" | "questions" | "docs" | "rx_validate">(
     "home"
   );
 
@@ -944,6 +944,12 @@ function GuardianHome({
                 icon={<FileText className="h-5 w-5" />}
                 onClick={() => setTab("docs")}
               />
+              <QuickAction
+                title="Validar receita digital"
+                desc="Digite o código da receita para validar autenticidade e visualizar conteúdo."
+                icon={<ShieldCheck className="h-5 w-5" />}
+                onClick={() => setTab("rx_validate")}
+              />
             </div>
           ) : null}
 
@@ -963,6 +969,10 @@ function GuardianHome({
 
           {tab === "docs" ? (
             <DocumentsInfoMock user={user} onBack={() => setTab("home")} />
+          ) : null}
+
+          {tab === "rx_validate" ? (
+            <PrescriptionValidationHub onBack={() => setTab("home")} />
           ) : null}
         </div>
       </Card>
@@ -3572,6 +3582,7 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
     | "vaccines"
     | "availability"
     | "medicines"
+    | "rx_validate"
     | "doc_prescription"
     | "doc_exam"
     | "doc_certificate"
@@ -3720,6 +3731,18 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
                   alert("Plano inativo. Ative em Configurações para usar.");
                   return;
                 }
+                setTab("rx_validate");
+              }}
+              className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "rx_validate" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
+            >
+              <ShieldCheck className="inline h-4 w-4 mr-2" /> Validar receita
+            </button>
+            <button
+              onClick={() => {
+                if (planStatus !== "Ativo") {
+                  alert("Plano inativo. Ative em Configurações para usar.");
+                  return;
+                }
                 setTab("doc_prescription");
               }}
               className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition", tab === "doc_prescription" ? "bg-slate-900 text-white shadow-md" : "bg-white text-slate-600 hover:bg-slate-50")}
@@ -3792,6 +3815,7 @@ function DoctorHome({ user, onLogout }: { user: AppUser; onLogout: () => void })
           {tab === "development" && <DoctorDevelopmentTracker doctorEmail={user.email} />}
           {tab === "vaccines" && <DoctorVaccineTracker doctorEmail={user.email} />}
           {tab === "medicines" && <DoctorMedicineFinder />}
+          {tab === "rx_validate" && <PrescriptionValidationHub />}
           {tab === "doc_prescription" && <DoctorDocumentComposer doctorEmail={user.email} kind="prescription" />}
           {tab === "doc_exam" && <DoctorDocumentComposer doctorEmail={user.email} kind="exam" />}
           {tab === "doc_certificate" && <DoctorDocumentComposer doctorEmail={user.email} kind="certificate" />}
@@ -5126,6 +5150,44 @@ type VaccineScheduleItem = {
 type VaccineMark = {
   done: boolean;
 };
+
+type PrescriptionTemplate = {
+  id: string;
+  label: string;
+  value: string;
+};
+
+type MedicineSuggestionPayload = {
+  query: string;
+  suggestions: string[];
+};
+
+const PRESCRIPTION_TEMPLATE_SUGGESTIONS: PrescriptionTemplate[] = [
+  {
+    id: "amox",
+    label: "Amoxicilina (modelo)",
+    value:
+      "Amoxicilina 250 mg/5 mL suspensão oral\nPosologia: administrar 50 mg/kg/dia, VO, divididos a cada 8 horas, por 7 a 10 dias.\nOrientações: agitar antes de usar e completar o tempo prescrito.",
+  },
+  {
+    id: "dip",
+    label: "Dipirona (modelo)",
+    value:
+      "Dipirona gotas 500 mg/mL\nPosologia: 1 gota/kg/dose, VO, a cada 6/6h se dor ou febre.\nDose máxima diária conforme bula.\nOrientações: retornar se febre persistir por mais de 48h.",
+  },
+  {
+    id: "paracetamol",
+    label: "Paracetamol (modelo)",
+    value:
+      "Paracetamol 200 mg/mL\nPosologia: 10 a 15 mg/kg/dose, VO, a cada 6 horas se necessário.\nOrientações: não exceder 5 doses em 24 horas e manter hidratação adequada.",
+  },
+  {
+    id: "soro",
+    label: "Soro de reidratação oral (modelo)",
+    value:
+      "Soro de reidratação oral\nPosologia: ofertar pequenos volumes frequentes após evacuações e vômitos.\nOrientações: observar sinais de desidratação e procurar serviço de urgência se piora.",
+  },
+];
 
 const VACCINE_SCHEDULE: VaccineScheduleItem[] = [
   { id: "vac_001", section: "ate12", vaccine: "BCG", dose: "Dose única", minMonth: 0, maxMonth: 1 },
@@ -6888,6 +6950,121 @@ function DoctorMedicineFinder() {
   );
 }
 
+function PrescriptionValidationHub({ onBack }: { onBack?: () => void }) {
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<any>(null);
+
+  async function handleValidate() {
+    const value = code.trim();
+    if (!value) {
+      setError("Informe o código digital da receita.");
+      setResult(null);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const query = value.includes(".")
+        ? `/api/validate-prescription?format=json&token=${encodeURIComponent(value)}`
+        : `/api/validate-prescription?format=json&code=${encodeURIComponent(value)}`;
+
+      const response = await fetch(query);
+      const data = await response.json();
+
+      if (!response.ok || !data?.valid) {
+        throw new Error(data?.reason || data?.error || "Não foi possível validar este código.");
+      }
+
+      setResult(data);
+    } catch (err: any) {
+      setError(err?.message || "Falha ao validar receita digital.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Card>
+      <div className="p-5 grid gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Validação de receita digital</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Digite o código da receita para validar autenticidade e visualizar medicamento/prescrição.
+            </div>
+          </div>
+          {onBack ? (
+            <Button variant="secondary" onClick={onBack}>
+              Voltar
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+          <Input
+            label="Código digital da receita"
+            value={code}
+            onChange={setCode}
+            placeholder="Ex.: RXA12BC34D56"
+          />
+          <Button onClick={handleValidate} disabled={loading || !code.trim()}>
+            {loading ? "Validando..." : "Validar"}
+          </Button>
+        </div>
+
+        {error ? (
+          <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800 ring-1 ring-rose-200">{error}</div>
+        ) : null}
+
+        {result?.valid ? (
+          <div className="rounded-xl bg-emerald-50 p-4 ring-1 ring-emerald-200 grid gap-2">
+            <div className="text-sm font-semibold text-emerald-900">Receita válida ✅</div>
+            <div className="text-sm text-emerald-900"><b>Código:</b> {result.code || result.lookupCode || "-"}</div>
+            <div className="text-sm text-emerald-900"><b>Paciente:</b> {result.payload?.childName || "-"}</div>
+            <div className="text-sm text-emerald-900"><b>Médico:</b> {result.payload?.doctorEmail || "-"}</div>
+            <div className="text-sm text-emerald-900"><b>Medicamento principal:</b> {result.primaryMedicine || "-"}</div>
+            <div className="text-sm text-emerald-900 whitespace-pre-wrap"><b>Receita:</b> {result.content || "-"}</div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {result.ifoodUrl ? (
+                <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
+                  <div className="text-xs font-semibold text-emerald-800">QR iFood</div>
+                  <img
+                    src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(result.ifoodUrl)}`}
+                    alt="QR code iFood"
+                    className="mt-2 h-[150px] w-[150px] rounded-md bg-white"
+                  />
+                </div>
+              ) : null}
+              {result.payload ? (
+                <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
+                  <div className="text-xs font-semibold text-emerald-800">QR validação</div>
+                  <img
+                    src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(`Código de validação: ${result.code || result.lookupCode || code}`)}`}
+                    alt="QR code validação"
+                    className="mt-2 h-[150px] w-[150px] rounded-md bg-white"
+                  />
+                </div>
+              ) : null}
+            </div>
+            {result.ifoodUrl ? (
+              <div className="pt-1">
+                <Button variant="secondary" onClick={() => window.open(result.ifoodUrl, "_blank")}>
+                  Abrir compra no iFood
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
 function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; kind: DoctorDocumentKind }) {
   const [children, setChildren] = useState<Child[]>([]);
   const [loadingChildren, setLoadingChildren] = useState(false);
@@ -6899,6 +7076,14 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
   const [generating, setGenerating] = useState(false);
   const [sendPhone, setSendPhone] = useState("");
   const [sendEmail, setSendEmail] = useState("");
+  const [prescriptionSuggestion, setPrescriptionSuggestion] = useState("");
+  const [medicineCatalogQuery, setMedicineCatalogQuery] = useState("");
+  const [medicineCatalogLoading, setMedicineCatalogLoading] = useState(false);
+  const [medicineCatalogError, setMedicineCatalogError] = useState<string | null>(null);
+  const [medicineCatalogSuggestions, setMedicineCatalogSuggestions] = useState<string[]>([]);
+  const [generatedPrescriptionCode, setGeneratedPrescriptionCode] = useState("");
+  const [generatedPrescriptionVerificationUrl, setGeneratedPrescriptionVerificationUrl] = useState("");
+  const [generatedPrescriptionIfoodUrl, setGeneratedPrescriptionIfoodUrl] = useState("");
 
   const kindMeta = useMemo(() => {
     if (kind === "prescription") {
@@ -6944,6 +7129,9 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
     setTitle(kindMeta.defaultTitle);
     setContent("");
     setPdfUrl("");
+    setGeneratedPrescriptionCode("");
+    setGeneratedPrescriptionVerificationUrl("");
+    setGeneratedPrescriptionIfoodUrl("");
   }, [kindMeta.defaultTitle]);
 
   useEffect(() => {
@@ -7001,10 +7189,134 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
     return (phone || "").replace(/\D/g, "");
   }
 
-  function buildDocumentPdf(child: Child, documentTitle: string, documentBody: string) {
+  function extractMainMedicineTerm(rawText: string) {
+    const firstMeaningfulLine = rawText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+
+    if (!firstMeaningfulLine) return "medicamento";
+
+    const cleaned = firstMeaningfulLine
+      .replace(/\b(posologia|orienta(ç|c)(o|õ)es|uso|dose)\b.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    return cleaned || "medicamento";
+  }
+
+  async function buildQrDataUrl(text: string) {
+    const normalizedText = String(text || "").trim();
+    if (!normalizedText) return "";
+
+    try {
+      const qrUrl = `https://quickchart.io/qr?size=180&text=${encodeURIComponent(normalizedText)}`;
+      const response = await fetch(qrUrl);
+      if (!response.ok) return "";
+      const blob = await response.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("Falha ao converter QR."));
+        reader.readAsDataURL(blob);
+      });
+      return dataUrl;
+    } catch {
+      return "";
+    }
+  }
+
+  async function searchMedicineCatalog() {
+    const query = medicineCatalogQuery.trim();
+    if (!query) {
+      setMedicineCatalogSuggestions([]);
+      setMedicineCatalogError("Digite o nome do medicamento para buscar.");
+      return;
+    }
+
+    setMedicineCatalogLoading(true);
+    setMedicineCatalogError(null);
+    setMedicineCatalogSuggestions([]);
+
+    try {
+      const response = await fetch("/api/medicine-suggestions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+
+      const data = (await response.json()) as MedicineSuggestionPayload & { error?: string };
+      if (!response.ok) {
+        throw new Error(data?.error || "Falha ao buscar medicamentos.");
+      }
+
+      setMedicineCatalogSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
+      if (!data.suggestions || data.suggestions.length === 0) {
+        setMedicineCatalogError("Nenhum medicamento encontrado para esse termo.");
+      }
+    } catch (err: any) {
+      setMedicineCatalogError(err?.message || "Falha ao buscar medicamentos.");
+    } finally {
+      setMedicineCatalogLoading(false);
+    }
+  }
+
+  async function getPrescriptionVerificationPayload(child: Child, documentTitle: string, documentBody: string) {
+    const primaryMedicine = extractMainMedicineTerm(documentBody);
+    const response = await fetch("/api/prescription-sign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind,
+        doctorEmail,
+        childId: child.id,
+        childName: child.name,
+        issueDate: date,
+        title: documentTitle,
+        content: documentBody,
+        primaryMedicine,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || "Falha ao gerar validação da receita.");
+    }
+
+    const data = (await response.json()) as {
+      code: string;
+      verificationUrl: string;
+      token: string;
+    };
+
+    const looksLikeMedicine =
+      kind === "prescription" ||
+      /\b(mg|ml|comprim|caps|xarope|gotas|suspens|posologia|dipirona|paracetamol|amoxicilina)\b/i.test(
+        documentBody
+      );
+    const ifoodUrl = looksLikeMedicine
+      ? `https://www.ifood.com.br/busca?q=${encodeURIComponent(`${primaryMedicine} farmácia`)}`
+      : "";
+
+    return {
+      ...data,
+      primaryMedicine,
+      ifoodUrl,
+    };
+  }
+
+  async function buildDocumentPdf(child: Child, documentTitle: string, documentBody: string) {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
     let y = 10;
+    let verificationInfo: {
+      code: string;
+      verificationUrl: string;
+      ifoodUrl: string;
+      primaryMedicine: string;
+      token: string;
+    } | null = null;
 
     const headerTop = y;
     const logoX = 10;
@@ -7074,6 +7386,83 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
     doc.text(lines, 10, y);
     y += lines.length * 5 + 12;
 
+    {
+      try {
+        const verification = await getPrescriptionVerificationPayload(child, documentTitle, documentBody);
+        verificationInfo = verification;
+
+        if (y > 190) {
+          doc.addPage();
+          y = 20;
+        }
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.text("Validação digital do documento", 10, y);
+        y += 5;
+
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        const validationLines = doc.splitTextToSize(
+          `Código digital: ${verification.code} | Valide em: ${verification.verificationUrl}`,
+          pageWidth - 20
+        );
+        doc.text(validationLines, 10, y);
+        y += validationLines.length * 4.3 + 2;
+
+        if (verification.ifoodUrl) {
+          const ifoodLines = doc.splitTextToSize(
+            `Compra no iFood (farmácia): ${verification.ifoodUrl}`,
+            pageWidth - 20
+          );
+          doc.text(ifoodLines, 10, y);
+          y += ifoodLines.length * 4.3 + 4;
+        }
+
+        const validationQrDataUrl = await buildQrDataUrl(verification.verificationUrl);
+        const ifoodQrDataUrl = verification.ifoodUrl ? await buildQrDataUrl(verification.ifoodUrl) : "";
+
+        if (validationQrDataUrl || ifoodQrDataUrl) {
+          if (y > 220) {
+            doc.addPage();
+            y = 20;
+          }
+
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(9);
+
+          if (validationQrDataUrl) {
+            doc.text("QR validação", 10, y);
+            doc.addImage(validationQrDataUrl, "PNG", 10, y + 2, 30, 30);
+          }
+
+          if (ifoodQrDataUrl) {
+            doc.text("QR iFood", 46, y);
+            doc.addImage(ifoodQrDataUrl, "PNG", 46, y + 2, 30, 30);
+          }
+
+          y += 36;
+        }
+      } catch (validationErr: any) {
+        const validationMessage = String(validationErr?.message || "");
+        if (/PRESCRIPTION_VERIFY_SECRET/i.test(validationMessage)) {
+          return {
+            blob: doc.output("blob"),
+            verification: verificationInfo,
+          };
+        }
+
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8.5);
+        const warn = doc.splitTextToSize(
+          `Aviso: não foi possível anexar validação digital (${validationMessage || "erro desconhecido"}).`,
+          pageWidth - 20
+        );
+        doc.text(warn, 10, y);
+        y += warn.length * 4.2 + 6;
+      }
+    }
+
     if (y > 230) {
       doc.addPage();
       y = 200;
@@ -7085,7 +7474,10 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
     doc.text(doctorPdf.doctorName, pageWidth / 2, 266, { align: "center" });
     doc.text(doctorPdf.registration, pageWidth / 2, 272, { align: "center" });
 
-    return doc.output("blob");
+    return {
+      blob: doc.output("blob"),
+      verification: verificationInfo,
+    };
   }
 
   async function handleGeneratePdf() {
@@ -7099,7 +7491,8 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
     }
 
     const normalizedTitle = title.trim() || kindMeta.defaultTitle;
-    const pdfBlob = buildDocumentPdf(selectedChild, normalizedTitle, content);
+    const built = await buildDocumentPdf(selectedChild, normalizedTitle, content);
+    const pdfBlob = built.blob;
 
     const fileNameSafe = `${kind}_${Date.now()}.pdf`;
     const filePath = `${selectedChild.id}/${fileNameSafe}`;
@@ -7115,6 +7508,16 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
       const { data: urlData } = supabase.storage.from("child-docs").getPublicUrl(filePath);
       const publicUrl = urlData.publicUrl;
       setPdfUrl(publicUrl);
+
+      if (built.verification) {
+        setGeneratedPrescriptionCode(built.verification.code || "");
+        setGeneratedPrescriptionVerificationUrl(built.verification.verificationUrl || "");
+        setGeneratedPrescriptionIfoodUrl(built.verification.ifoodUrl || "");
+      } else {
+        setGeneratedPrescriptionCode("");
+        setGeneratedPrescriptionVerificationUrl("");
+        setGeneratedPrescriptionIfoodUrl("");
+      }
 
       const localUrl = URL.createObjectURL(pdfBlob);
       const a = document.createElement("a");
@@ -7187,6 +7590,79 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
           placeholder={kindMeta.placeholder}
         />
 
+        {kind === "prescription" ? (
+          <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
+            <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+              <Select
+                label="Modelo de medicamento"
+                value={prescriptionSuggestion}
+                onChange={setPrescriptionSuggestion}
+                options={[
+                  { label: "Selecione uma sugestão...", value: "" },
+                  ...PRESCRIPTION_TEMPLATE_SUGGESTIONS.map((item) => ({ label: item.label, value: item.id })),
+                ]}
+              />
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  const picked = PRESCRIPTION_TEMPLATE_SUGGESTIONS.find((item) => item.id === prescriptionSuggestion);
+                  if (!picked) {
+                    alert("Selecione um modelo para inserir.");
+                    return;
+                  }
+                  setContent((prev) => {
+                    const base = prev.trim();
+                    return base ? `${base}\n\n${picked.value}` : picked.value;
+                  });
+                }}
+                disabled={!prescriptionSuggestion}
+              >
+                Inserir sugestão
+              </Button>
+            </div>
+            <div className="mt-2 text-xs text-slate-500">
+              Sugestões pré-prontas de apoio. Revisar dose e conduta clínica antes de emitir.
+            </div>
+
+            <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+              <Input
+                label="Buscar medicamento (catálogo amplo)"
+                value={medicineCatalogQuery}
+                onChange={setMedicineCatalogQuery}
+                placeholder="Ex.: amoxicilina"
+              />
+              <Button variant="secondary" onClick={searchMedicineCatalog} disabled={medicineCatalogLoading}>
+                {medicineCatalogLoading ? "Buscando..." : "Buscar medicamento"}
+              </Button>
+            </div>
+
+            {medicineCatalogError ? (
+              <div className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 ring-1 ring-amber-200">
+                {medicineCatalogError}
+              </div>
+            ) : null}
+
+            {medicineCatalogSuggestions.length > 0 ? (
+              <div className="mt-2 grid gap-2">
+                {medicineCatalogSuggestions.slice(0, 20).map((name) => (
+                  <div key={name} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white p-2 ring-1 ring-slate-200">
+                    <div className="text-sm text-slate-800">{name}</div>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        const line = `${name}\nPosologia: ajustar dose por peso/idade conforme avaliação médica.\nOrientações: orientar responsáveis sobre horários, duração e sinais de alerta.`;
+                        setContent((prev) => (prev.trim() ? `${prev.trim()}\n\n${line}` : line));
+                      }}
+                    >
+                      Inserir
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="grid gap-3 md:grid-cols-2">
           <Input
             label="Telefone (WhatsApp)"
@@ -7206,6 +7682,49 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
         <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 break-all">
           <b>Link do PDF:</b> {pdfUrl || "Gere o PDF para criar o link."}
         </div>
+
+        {generatedPrescriptionCode ? (
+          <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-emerald-200">
+            <div><b>Código digital do documento:</b> {generatedPrescriptionCode}</div>
+            {generatedPrescriptionVerificationUrl ? (
+              <div className="mt-1 break-all"><b>Validação:</b> {generatedPrescriptionVerificationUrl}</div>
+            ) : null}
+            <div className="grid gap-2 md:grid-cols-2 mt-2">
+              {generatedPrescriptionVerificationUrl ? (
+                <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
+                  <div className="text-xs font-semibold text-emerald-800">QR validação</div>
+                  <img
+                    src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(generatedPrescriptionVerificationUrl)}`}
+                    alt="QR validação do documento"
+                    className="mt-2 h-[150px] w-[150px] rounded-md bg-white"
+                  />
+                </div>
+              ) : null}
+              {generatedPrescriptionIfoodUrl ? (
+                <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
+                  <div className="text-xs font-semibold text-emerald-800">QR iFood</div>
+                  <img
+                    src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(generatedPrescriptionIfoodUrl)}`}
+                    alt="QR iFood"
+                    className="mt-2 h-[150px] w-[150px] rounded-md bg-white"
+                  />
+                </div>
+              ) : null}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {generatedPrescriptionIfoodUrl ? (
+                <Button variant="secondary" onClick={() => window.open(generatedPrescriptionIfoodUrl, "_blank")}>
+                  Abrir compra no iFood
+                </Button>
+              ) : null}
+              {generatedPrescriptionVerificationUrl ? (
+                <Button variant="secondary" onClick={() => window.open(generatedPrescriptionVerificationUrl, "_blank")}>
+                  Abrir validação da receita
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap justify-end gap-2">
           <Button onClick={handleGeneratePdf} disabled={generating || !patientId || !content.trim()}>
@@ -7500,10 +8019,18 @@ const [sendPdfUrl, setSendPdfUrl] = useState<string>("");
 const [sendChildName, setSendChildName] = useState<string>("");
 const [sendPhone, setSendPhone] = useState<string>(""); // whatsapp
 const [sendEmail, setSendEmail] = useState<string>(""); // email
+const [sendRxCode, setSendRxCode] = useState<string>("");
+const [sendRxVerificationUrl, setSendRxVerificationUrl] = useState<string>("");
+const [sendRxIfoodUrl, setSendRxIfoodUrl] = useState<string>("");
   const [evolucao, setEvolucao] = useState("");
   const [doencas, setDoencas] = useState("");
   const [conduta, setConduta] = useState("");
   const [receitas, setReceitas] = useState("");
+  const [consultPrescriptionSuggestion, setConsultPrescriptionSuggestion] = useState("");
+  const [consultMedicineQuery, setConsultMedicineQuery] = useState("");
+  const [consultMedicineLoading, setConsultMedicineLoading] = useState(false);
+  const [consultMedicineError, setConsultMedicineError] = useState<string | null>(null);
+  const [consultMedicineSuggestions, setConsultMedicineSuggestions] = useState<string[]>([]);
   const [exames, setExames] = useState("");
   const [retorno, setRetorno] = useState("");
 const [timerRunning, setTimerRunning] = useState(false);
@@ -7837,6 +8364,109 @@ function normalizePhoneDigits(phone: string) {
   return (phone || "").replace(/\D/g, ""); // deixa só números
 }
 
+function extractConsultMainMedicineTerm(rawText: string) {
+  const firstLine = String(rawText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+
+  if (!firstLine) return "";
+
+  return firstLine
+    .replace(/\b(posologia|orienta(ç|c)(o|õ)es|uso|dose)\b.*$/i, "")
+    .trim();
+}
+
+async function buildConsultQrDataUrl(text: string) {
+  const normalizedText = String(text || "").trim();
+  if (!normalizedText) return "";
+
+  try {
+    const qrUrl = `https://quickchart.io/qr?size=180&text=${encodeURIComponent(normalizedText)}`;
+    const response = await fetch(qrUrl);
+    if (!response.ok) return "";
+    const blob = await response.blob();
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Falha ao converter QR."));
+      reader.readAsDataURL(blob);
+    });
+    return dataUrl;
+  } catch {
+    return "";
+  }
+}
+
+async function getConsultationVerificationPayload(child: Child, doctorEmail: string, consultationDocumentContent: string) {
+  const primaryMedicine = extractConsultMainMedicineTerm(receitas);
+  const signResponse = await fetch("/api/prescription-sign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind: "consultation",
+      doctorEmail,
+      childId: child.id,
+      childName: child.name,
+      issueDate: date,
+      title: "Consulta pediátrica",
+      content: consultationDocumentContent,
+      primaryMedicine,
+    }),
+  });
+
+  const signData = (await signResponse.json().catch(() => null)) as
+    | { code?: string; verificationUrl?: string }
+    | null;
+
+  if (!signResponse.ok || !signData?.code || !signData?.verificationUrl) {
+    return null;
+  }
+
+  return {
+    code: signData.code,
+    verificationUrl: signData.verificationUrl,
+    ifoodUrl: primaryMedicine
+      ? `https://www.ifood.com.br/busca?q=${encodeURIComponent(`${primaryMedicine} farmácia`)}`
+      : "",
+  };
+}
+
+async function searchConsultMedicineCatalog() {
+  const query = consultMedicineQuery.trim();
+  if (!query) {
+    setConsultMedicineSuggestions([]);
+    setConsultMedicineError("Digite o nome do medicamento para buscar.");
+    return;
+  }
+
+  setConsultMedicineLoading(true);
+  setConsultMedicineError(null);
+  setConsultMedicineSuggestions([]);
+
+  try {
+    const response = await fetch("/api/medicine-suggestions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+
+    const data = (await response.json()) as MedicineSuggestionPayload & { error?: string };
+    if (!response.ok) {
+      throw new Error(data?.error || "Falha ao buscar medicamentos.");
+    }
+
+    setConsultMedicineSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
+    if (!data.suggestions || data.suggestions.length === 0) {
+      setConsultMedicineError("Nenhum medicamento encontrado para esse termo.");
+    }
+  } catch (err: any) {
+    setConsultMedicineError(err?.message || "Falha ao buscar medicamentos.");
+  } finally {
+    setConsultMedicineLoading(false);
+  }
+}
+
 const PDF_BUCKET_NAME = "child-docs"; // bucket do Storage
 
 
@@ -7959,7 +8589,7 @@ async function salvarConsulta() {
     }
 
     // 2. GERAÇÃO DO PDF + UPLOAD primeiro (para não deixar registro no banco caso algo falhe)
-    const { blob: pdfBlob, fileName } = await gerarPdfConsultaBlob();
+    const { blob: pdfBlob, fileName, verification } = await gerarPdfConsultaBlob(doctorEmail);
     const filePath = `${child.id}/${fileName}`;
 
     // tenta enviar substituindo caso já exista (upsert evita erro "resource already exists")
@@ -8052,13 +8682,24 @@ async function salvarConsulta() {
       }
     }
 
-    // 5. prepara modal de envio
+    // 5. prepara validação digital do documento da consulta
+    if (verification?.code && verification?.verificationUrl) {
+      setSendRxCode(verification.code);
+      setSendRxVerificationUrl(verification.verificationUrl);
+      setSendRxIfoodUrl(verification.ifoodUrl || "");
+    } else {
+      setSendRxCode("");
+      setSendRxVerificationUrl("");
+      setSendRxIfoodUrl("");
+    }
+
+    // 6. prepara modal de envio
     setSendPdfUrl(pdfUrl);
     setSendChildName(child.name);
     setSendBoxOpen(true);
 
 
-    // 6. LIMPEZA COMPLETA DOS CAMPOS
+    // 7. LIMPEZA COMPLETA DOS CAMPOS
     setEvolucao(""); 
     setConduta(""); 
     setReceitas(""); 
@@ -8079,7 +8720,7 @@ async function salvarConsulta() {
 
   // 🔹 Gerar PDF da consulta com os dados preenchidos
   // 🔹 Gerar PDF da consulta com cabeçalho e logo
- async function gerarPdfConsultaBlob() {
+ async function gerarPdfConsultaBlob(doctorEmail: string) {
   if (!patientId) {
     alert("Selecione um paciente.");
     throw new Error("Sem paciente selecionado");
@@ -8093,6 +8734,7 @@ async function salvarConsulta() {
 
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
+  let verification: { code: string; verificationUrl: string; ifoodUrl: string } | null = null;
 
   let y = 10;
 
@@ -8193,6 +8835,78 @@ async function salvarConsulta() {
   bloco("Exames:", exames);
   bloco("Receituário:", receitas);
   bloco("Retorno:", retorno);
+
+  const consultationDocumentContent = [
+    doencas.trim() ? `Doenças/Diagnóstico:\n${doencas.trim()}` : "",
+    evolucao.trim() ? `Evolução/Orientações:\n${evolucao.trim()}` : "",
+    conduta.trim() ? `Conduta:\n${conduta.trim()}` : "",
+    exames.trim() ? `Exames:\n${exames.trim()}` : "",
+    receitas.trim() ? `Receituário:\n${receitas.trim()}` : "",
+    retorno.trim() ? `Retorno:\n${retorno.trim()}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  try {
+    verification = await getConsultationVerificationPayload(child, doctorEmail, consultationDocumentContent);
+  } catch {
+    verification = null;
+  }
+
+  if (verification?.code && verification?.verificationUrl) {
+    if (y > 210) {
+      doc.addPage();
+      y = 20;
+    }
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("Validação digital do documento", 10, y);
+    y += 5;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    const validationLines = doc.splitTextToSize(
+      `Código digital: ${verification.code} | Valide em: ${verification.verificationUrl}`,
+      pageWidth - 20
+    );
+    doc.text(validationLines, 10, y);
+    y += validationLines.length * 4.3 + 2;
+
+    if (verification.ifoodUrl) {
+      const ifoodLines = doc.splitTextToSize(
+        `Compra no iFood (farmácia): ${verification.ifoodUrl}`,
+        pageWidth - 20
+      );
+      doc.text(ifoodLines, 10, y);
+      y += ifoodLines.length * 4.3 + 3;
+    }
+
+    const validationQrDataUrl = await buildConsultQrDataUrl(verification.verificationUrl);
+    const ifoodQrDataUrl = verification.ifoodUrl ? await buildConsultQrDataUrl(verification.ifoodUrl) : "";
+
+    if (validationQrDataUrl || ifoodQrDataUrl) {
+      if (y > 220) {
+        doc.addPage();
+        y = 20;
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+
+      if (validationQrDataUrl) {
+        doc.text("QR validação", 10, y);
+        doc.addImage(validationQrDataUrl, "PNG", 10, y + 2, 30, 30);
+      }
+
+      if (ifoodQrDataUrl) {
+        doc.text("QR iFood", 46, y);
+        doc.addImage(ifoodQrDataUrl, "PNG", 46, y + 2, 30, 30);
+      }
+
+      y += 36;
+    }
+  }
 
   // Gráfico de crescimento (histórico do paciente) no final da ficha
   type GrowthRow = {
@@ -8354,7 +9068,7 @@ async function salvarConsulta() {
   const fileName = `consulta_${child.id}_${Date.now()}.pdf`;
   const blob = doc.output("blob");
 
-  return { blob, fileName };
+  return { blob, fileName, verification };
 }
 
   return (
@@ -8468,6 +9182,79 @@ async function salvarConsulta() {
               onChange={setReceitas}
               placeholder="Medicações e posologia"
             />
+            <div className="-mt-1 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Sugestões de receituário
+              </div>
+
+              <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
+                <Select
+                  label="Modelos rápidos"
+                  value={consultPrescriptionSuggestion}
+                  onChange={setConsultPrescriptionSuggestion}
+                  options={[
+                    { label: "Selecione um modelo...", value: "" },
+                    ...PRESCRIPTION_TEMPLATE_SUGGESTIONS.map((item) => ({ label: item.label, value: item.id })),
+                  ]}
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const picked = PRESCRIPTION_TEMPLATE_SUGGESTIONS.find(
+                      (item) => item.id === consultPrescriptionSuggestion
+                    );
+                    if (!picked) {
+                      alert("Selecione um modelo para inserir.");
+                      return;
+                    }
+                    setReceitas((prev) => (prev.trim() ? `${prev.trim()}\n\n${picked.value}` : picked.value));
+                  }}
+                >
+                  Inserir modelo
+                </Button>
+              </div>
+
+              <div className="mt-3 grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
+                <Input
+                  label="Buscar medicamento (catálogo amplo)"
+                  value={consultMedicineQuery}
+                  onChange={setConsultMedicineQuery}
+                  placeholder="Ex.: ibuprofeno"
+                />
+                <Button
+                  variant="secondary"
+                  onClick={searchConsultMedicineCatalog}
+                  disabled={consultMedicineLoading}
+                >
+                  {consultMedicineLoading ? "Buscando..." : "Buscar medicamento"}
+                </Button>
+              </div>
+
+              {consultMedicineError ? (
+                <div className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 ring-1 ring-amber-200">
+                  {consultMedicineError}
+                </div>
+              ) : null}
+
+              {consultMedicineSuggestions.length > 0 ? (
+                <div className="mt-2 grid gap-2">
+                  {consultMedicineSuggestions.slice(0, 12).map((name) => (
+                    <div key={name} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white p-2 ring-1 ring-slate-200">
+                      <div className="text-sm text-slate-800">{name}</div>
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          const line = `${name}\nPosologia: ajustar dose por peso/idade conforme avaliação médica.\nOrientações: orientar responsáveis sobre horários, duração e sinais de alerta.`;
+                          setReceitas((prev) => (prev.trim() ? `${prev.trim()}\n\n${line}` : line));
+                        }}
+                      >
+                        Inserir
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <TextArea
               label="Retorno"
               value={retorno}
@@ -8505,23 +9292,6 @@ async function salvarConsulta() {
 
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button
-  onClick={async () => {
-    const { blob, fileName } = await gerarPdfConsultaBlob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
-  }}
-  disabled={!patientId || children.length === 0}
-  variant="secondary"
->
-  Abrir consulta em PDF
-</Button>
-
-            
-            <Button
               onClick={salvarConsulta}
               disabled={loading || children.length === 0}
             >
@@ -8542,6 +9312,49 @@ async function salvarConsulta() {
       <div className="mt-1 break-all"><b>PDF:</b> {sendPdfUrl}</div>
     </div>
 
+    {sendRxCode ? (
+      <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-emerald-200">
+        <div><b>Código digital do documento:</b> {sendRxCode}</div>
+        {sendRxVerificationUrl ? (
+          <div className="mt-1 break-all"><b>Validação:</b> {sendRxVerificationUrl}</div>
+        ) : null}
+        <div className="grid gap-2 md:grid-cols-2 mt-2">
+          {sendRxVerificationUrl ? (
+            <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
+              <div className="text-xs font-semibold text-emerald-800">QR validação</div>
+              <img
+                src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(sendRxVerificationUrl)}`}
+                alt="QR validação consulta"
+                className="mt-2 h-[150px] w-[150px] rounded-md bg-white"
+              />
+            </div>
+          ) : null}
+          {sendRxIfoodUrl ? (
+            <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
+              <div className="text-xs font-semibold text-emerald-800">QR iFood</div>
+              <img
+                src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(sendRxIfoodUrl)}`}
+                alt="QR iFood consulta"
+                className="mt-2 h-[150px] w-[150px] rounded-md bg-white"
+              />
+            </div>
+          ) : null}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {sendRxIfoodUrl ? (
+            <Button variant="secondary" onClick={() => window.open(sendRxIfoodUrl, "_blank")}>
+              Abrir compra no iFood
+            </Button>
+          ) : null}
+          {sendRxVerificationUrl ? (
+            <Button variant="secondary" onClick={() => window.open(sendRxVerificationUrl, "_blank")}>
+              Abrir validação da receita
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    ) : null}
+
     <Input
       label="Telefone (WhatsApp)"
       value={sendPhone}
@@ -8558,6 +9371,28 @@ async function salvarConsulta() {
     />
 
     <div className="flex flex-wrap justify-end gap-2">
+      <Button
+        variant="secondary"
+        onClick={async () => {
+          if (!sendPdfUrl) return alert("PDF ainda não disponível.");
+          try {
+            const response = await fetch(sendPdfUrl);
+            if (!response.ok) throw new Error("Falha ao baixar o PDF.");
+            const blob = await response.blob();
+            const localUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = localUrl;
+            anchor.download = `consulta_${sendChildName || "paciente"}_${Date.now()}.pdf`;
+            anchor.click();
+            URL.revokeObjectURL(localUrl);
+          } catch {
+            window.open(sendPdfUrl, "_blank");
+          }
+        }}
+      >
+        Download PDF
+      </Button>
+
       <Button
         variant="secondary"
         onClick={async () => {
@@ -8613,6 +9448,7 @@ export default function IndexPage() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginMode, setLoginMode] = useState<Role>("guardian");
   const [appUser, setAppUser] = useState<AppUser | null>(null);
+  const [publicView, setPublicView] = useState<"landing" | "rx_validate">("landing");
 
   useEffect(() => {
     if (loading) return;
@@ -8634,6 +9470,7 @@ export default function IndexPage() {
   function onLoggedIn(u: AppUser) {
     localStorage.setItem(`rbgp_role_${u.email.toLowerCase()}`, u.role);
     setAppUser(u);
+    setPublicView("landing");
   }
 
   return (
@@ -8651,6 +9488,8 @@ export default function IndexPage() {
           <GuardianHome user={appUser} onLogout={logout} />
         ) : appUser?.role === "doctor" ? (
           <DoctorHome user={appUser} onLogout={logout} />
+        ) : publicView === "rx_validate" ? (
+          <PrescriptionValidationHub onBack={() => setPublicView("landing")} />
         ) : (
           <Landing
             onGuardian={() => {
@@ -8664,6 +9503,9 @@ export default function IndexPage() {
             onSubscribeDoctor={() => {
               setLoginMode("doctor");
               setLoginOpen(true);
+            }}
+            onOpenPrescriptionValidation={() => {
+              setPublicView("rx_validate");
             }}
           />
         )}
@@ -8726,10 +9568,12 @@ function Landing({
   onGuardian,
   onDoctor,
   onSubscribeDoctor,
+  onOpenPrescriptionValidation,
 }: {
   onGuardian: () => void;
   onDoctor: () => void;
   onSubscribeDoctor: () => void;
+  onOpenPrescriptionValidation: () => void;
 }) {
   return (
     <Card>
@@ -8738,7 +9582,7 @@ function Landing({
         subtitle="Entre como responsável (Portal) ou como pediatra."
       />
       <div className="p-5">
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-5">
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
               <UserRound className="h-4 w-4" /> Portal do paciente
@@ -8769,6 +9613,20 @@ function Landing({
                   <CreditCard className="h-4 w-4" /> Assinar plano
                 </Button>
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+              <ShieldCheck className="h-4 w-4" /> Validar receita digital
+            </div>
+            <div className="mt-2 text-sm text-slate-600">
+              Acesse a validação da receita por código digital sem precisar entrar no portal.
+            </div>
+            <div className="mt-4">
+              <Button onClick={onOpenPrescriptionValidation}>
+                Validar receita <ChevronRight className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </div>
