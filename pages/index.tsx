@@ -456,6 +456,50 @@ async function handleSendEmailConsult(pdfUrl: string, childName: string, toEmail
   }
 }
 
+async function handleSendSmsConsult(
+  pdfUrl: string | null | undefined,
+  childName: string,
+  guardianPhone?: string | null
+) {
+  if (typeof window === "undefined") return;
+
+  const phone = String(guardianPhone || "").trim();
+  if (!phone) {
+    alert("Preencha o telefone do responsável antes de enviar SMS.");
+    return;
+  }
+
+  const rawPhone = phone.replace(/\D/g, "");
+  if (rawPhone.length < 10) {
+    alert("Telefone do responsável parece inválido.");
+    return;
+  }
+
+  const message = pdfUrl
+    ? `Olá! Segue o PDF da consulta de ${childName}: ${pdfUrl}`
+    : `Olá! Há uma atualização da consulta de ${childName}.`;
+
+  try {
+    const response = await fetch("/api/send-sms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        toPhone: phone,
+        message,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data?.error || "Não foi possível enviar o SMS.");
+    }
+
+    alert("SMS enviado com sucesso.");
+  } catch (error: any) {
+    alert(error?.message || "Não foi possível enviar o SMS.");
+  }
+}
+
 
 function storageKeyConsultations(email: string) {
   return `rbgp_consults_${email.toLowerCase()}`;
@@ -3462,7 +3506,7 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
               </div>
             ) : (
               <>
-                <div className="mt-4 h-72 w-full">
+                <div className="mt-3 h-56 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <ReLineChart data={growthChartData}>
                       <CartesianGrid strokeDasharray="3 3" />
@@ -3498,7 +3542,7 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
                         }}
                       />
 
-                      <Legend />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
                       {/* linhas WHO */}
                       <Line
                         type="monotone"
@@ -3530,9 +3574,9 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
                         dataKey="child"
                         stroke="#2563eb"
                         strokeWidth={2}
-                        dot={{ r: 6, fill: '#2563eb' }}
+                        dot={{ r: 4, fill: '#2563eb' }}
                         name={growthChildName || "Paciente"}
-                        activeDot={{ r: 8 }}
+                        activeDot={{ r: 6 }}
                       />
                     </ReLineChart>
                   </ResponsiveContainer>
@@ -3567,7 +3611,7 @@ function DocumentsInfoMock({ user, onBack }: { user: AppUser; onBack: () => void
       )}
     </div>
   );
-} // <-- ADDED: missing closing brace for DocumentsInfoMock
+}
 
 // ---------- Área do Pediatra ----------
 // ---------- Área do Pediatra ----------
@@ -4128,7 +4172,8 @@ function DoctorPatients() {
   const [children, setChildren] = useState<Child[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-const [openCreate, setOpenCreate] = useState(false);
+  const [openCreate, setOpenCreate] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
 
   const [selectedChildId, setSelectedChildId] = useState<string>("");
 
@@ -4161,11 +4206,34 @@ async function loadChildren() {
       return;
     }
 
-    const { data, error } = await supabase
+    const doctorEmail = String(authData.user?.email ?? "").trim().toLowerCase();
+
+    let query = supabase
       .from("children")
       .select("id,name,birth_date,sex,guardian_email,guardian_phone,doctor_id")
-      .eq("doctor_id", currentDoctorId)
       .order("created_at", { ascending: false });
+
+    if (currentDoctorId) {
+      query = query.eq("doctor_id", currentDoctorId);
+    }
+
+    let data: any[] | null = null;
+    let error: any = null;
+
+    const firstAttempt = await query;
+    data = firstAttempt.data as any[] | null;
+    error = firstAttempt.error;
+
+    if (error && /doctor_email|pediatrician_email/i.test(error.message || "")) {
+      const fallback = await supabase
+        .from("children")
+        .select("id,name,birth_date,sex,guardian_email,guardian_phone,doctor_id")
+        .eq("doctor_id", currentDoctorId ?? "")
+        .order("created_at", { ascending: false });
+
+      data = fallback.data as any[] | null;
+      error = fallback.error;
+    }
 
     if (error) throw error;
 
@@ -4365,6 +4433,18 @@ async function createPatient(data: any) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChildId]);
 
+  const filteredChildren = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    if (!query) return children;
+    return children.filter((c) => {
+      return (
+        c.name.toLowerCase().includes(query) ||
+        String(c.guardianEmail ?? "").toLowerCase().includes(query) ||
+        String(c.guardianPhone ?? "").toLowerCase().includes(query)
+      );
+    });
+  }, [children, searchTerm]);
+
   const selectedChild = children.find((c) => c.id === selectedChildId) ?? null;
 
   return (
@@ -4405,28 +4485,54 @@ async function createPatient(data: any) {
             <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
               Nenhuma criança cadastrada ainda.
             </div>
+          ) : filteredChildren.length === 0 ? (
+            <>
+              <div className="mt-4">
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Pesquisar paciente..."
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                />
+              </div>
+              <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
+                Nenhum paciente corresponde a "{searchTerm}".
+              </div>
+            </>
           ) : (
-            <div className="mt-4 grid gap-2">
-              {children.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setSelectedChildId(c.id)}
-                  className={cn(
-                    "flex w-full flex-col items-start gap-1 rounded-xl border p-3 text-left transition",
-                    selectedChildId === c.id
-                      ? "border-slate-900 bg-slate-50"
-                      : "border-slate-200 bg-white hover:bg-slate-50"
-                  )}
-                >
-                  <div className="truncate text-sm font-semibold text-slate-900">
-                    {c.name}
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    Nasc.: {formatDateBR(c.birthDate)} • Sexo: {c.sex}
-                  </div>
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="mt-4">
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Pesquisar paciente..."
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                />
+              </div>
+              <div className="mt-4 grid gap-2">
+                {filteredChildren.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => setSelectedChildId(c.id)}
+                    className={cn(
+                      "flex w-full flex-col items-start gap-1 rounded-xl border p-3 text-left transition",
+                      selectedChildId === c.id
+                        ? "border-slate-900 bg-slate-50"
+                        : "border-slate-200 bg-white hover:bg-slate-50"
+                    )}
+                  >
+                    <div className="truncate text-sm font-semibold text-slate-900">
+                      {c.name}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      Nasc.: {formatDateBR(c.birthDate)} • Sexo: {c.sex}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
           )}
         </div>
       </Card>
@@ -4599,6 +4705,14 @@ async function createPatient(data: any) {
     className="rounded-xl bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
   >
     Enviar via WhatsApp
+  </button>
+
+  <button
+    type="button"
+    onClick={() => handleSendSmsConsult(c.pdfUrl ?? null, c.childName, selectedChild?.guardianPhone)}
+    className="rounded-xl bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-600"
+  >
+    Enviar por SMS
   </button>
 
 <button
@@ -6702,7 +6816,7 @@ function DoctorGrowthDashboard() {
       <div className="rounded-xl ring-1 ring-slate-200 p-3">
         <div className="text-sm font-semibold text-slate-900 mb-1">{title}</div>
         <div className="text-xs text-slate-500 mb-2">Curvas OMS aproximadas (escore-z) + linha do paciente</div>
-        <div className="h-72">
+        <div className="h-52">
           <ResponsiveContainer width="100%" height="100%">
             <ReLineChart data={data}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -6715,7 +6829,7 @@ function DoctorGrowthDashboard() {
                 }}
                 labelFormatter={(label) => `Idade: ${label} meses`}
               />
-              <Legend />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
 
               <Line type="monotone" dataKey="z3" name="+3" stroke="#111827" strokeWidth={1.2} dot={false} connectNulls />
               <Line type="monotone" dataKey="z2" name="+2" stroke="#e11d48" strokeWidth={1.1} dot={false} connectNulls />
@@ -6731,8 +6845,8 @@ function DoctorGrowthDashboard() {
                 name="Paciente"
                 stroke="#2563eb"
                 strokeWidth={2.2}
-                dot={{ r: 3 }}
-                activeDot={{ r: 6 }}
+                dot={{ r: 2.5 }}
+                activeDot={{ r: 4.5 }}
                 connectNulls
               />
             </ReLineChart>
@@ -6779,7 +6893,7 @@ function DoctorGrowthDashboard() {
           ) : !hasAnyPatientData ? (
             <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">Sem medidas suficientes para plotar a linha do paciente.</div>
           ) : (
-            <div className="grid gap-4">
+            <div className="grid gap-3">
               {renderWhoChart("Estatura para idade (0-24 meses)", "cm", heightChartData, false)}
               {renderWhoChart("Peso para idade (0-24 meses)", "kg", weightChartData, false)}
               {renderWhoChart("Perímetro cefálico para idade (0-24 meses)", "cm", headChartData, true)}
@@ -6989,13 +7103,15 @@ function PrescriptionValidationHub({ onBack }: { onBack?: () => void }) {
   }
 
   return (
-    <Card>
-      <div className="p-5 grid gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+    <Card className="overflow-hidden">
+      <div className="relative border-b border-emerald-100 bg-emerald-50/70 p-5">
+        <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full bg-emerald-100" />
+        <div className="pointer-events-none absolute -bottom-8 left-8 h-16 w-16 rounded-full bg-emerald-100/80" />
+        <div className="relative flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-slate-900">Validação de receita digital</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Digite o código da receita para validar autenticidade e visualizar medicamento/prescrição.
+            <div className="text-base font-semibold text-emerald-900">🧾 Verificar receita digital</div>
+            <div className="mt-1 text-sm text-emerald-800">
+              Digite o código e confira se a receita é verdadeira, com acesso rápido ao conteúdo e ao iFood.
             </div>
           </div>
           {onBack ? (
@@ -7003,6 +7119,12 @@ function PrescriptionValidationHub({ onBack }: { onBack?: () => void }) {
               Voltar
             </Button>
           ) : null}
+        </div>
+      </div>
+
+      <div className="grid gap-4 p-5">
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-700">
+          ✨ Dica: você pode colar o código curto da receita (ex.: RXA12BC34D56) para validar em segundos.
         </div>
 
         <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
@@ -7013,7 +7135,7 @@ function PrescriptionValidationHub({ onBack }: { onBack?: () => void }) {
             placeholder="Ex.: RXA12BC34D56"
           />
           <Button onClick={handleValidate} disabled={loading || !code.trim()}>
-            {loading ? "Validando..." : "Validar"}
+            {loading ? "Validando..." : "Validar agora"}
           </Button>
         </div>
 
@@ -7022,17 +7144,32 @@ function PrescriptionValidationHub({ onBack }: { onBack?: () => void }) {
         ) : null}
 
         {result?.valid ? (
-          <div className="rounded-xl bg-emerald-50 p-4 ring-1 ring-emerald-200 grid gap-2">
-            <div className="text-sm font-semibold text-emerald-900">Receita válida ✅</div>
-            <div className="text-sm text-emerald-900"><b>Código:</b> {result.code || result.lookupCode || "-"}</div>
-            <div className="text-sm text-emerald-900"><b>Paciente:</b> {result.payload?.childName || "-"}</div>
-            <div className="text-sm text-emerald-900"><b>Médico:</b> {result.payload?.doctorEmail || "-"}</div>
-            <div className="text-sm text-emerald-900"><b>Medicamento principal:</b> {result.primaryMedicine || "-"}</div>
-            <div className="text-sm text-emerald-900 whitespace-pre-wrap"><b>Receita:</b> {result.content || "-"}</div>
+          <div className="grid gap-3 rounded-2xl bg-emerald-50 p-4 ring-1 ring-emerald-200">
+            <div className="inline-flex w-fit items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-emerald-900 ring-1 ring-emerald-200">
+              ✅ Receita verificada com sucesso
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2">
+              <div className="rounded-xl bg-white p-3 ring-1 ring-emerald-200 text-sm text-slate-800">
+                <div><b>Código:</b> {result.code || result.lookupCode || "-"}</div>
+                <div><b>Paciente:</b> {result.payload?.childName || "-"}</div>
+                <div><b>Médico:</b> {result.payload?.doctorEmail || "-"}</div>
+              </div>
+              <div className="rounded-xl bg-white p-3 ring-1 ring-emerald-200 text-sm text-slate-800">
+                <div><b>Medicamento principal:</b> {result.primaryMedicine || "-"}</div>
+                <div className="mt-1 text-xs text-slate-500">Validação digital ativa para este documento.</div>
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-white p-3 ring-1 ring-emerald-200">
+              <div className="text-xs font-semibold text-emerald-900">Receita / conteúdo</div>
+              <div className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{result.content || "-"}</div>
+            </div>
+
             <div className="grid gap-2 md:grid-cols-2">
               {result.ifoodUrl ? (
-                <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
-                  <div className="text-xs font-semibold text-emerald-800">QR iFood</div>
+                <div className="rounded-xl bg-white p-3 ring-1 ring-emerald-200">
+                  <div className="text-xs font-semibold text-emerald-800">🛒 QR iFood</div>
                   <img
                     src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(result.ifoodUrl)}`}
                     alt="QR code iFood"
@@ -7041,8 +7178,8 @@ function PrescriptionValidationHub({ onBack }: { onBack?: () => void }) {
                 </div>
               ) : null}
               {result.payload ? (
-                <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
-                  <div className="text-xs font-semibold text-emerald-800">QR validação</div>
+                <div className="rounded-xl bg-white p-3 ring-1 ring-emerald-200">
+                  <div className="text-xs font-semibold text-emerald-800">🔎 QR validação</div>
                   <img
                     src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(`Código de validação: ${result.code || result.lookupCode || code}`)}`}
                     alt="QR code validação"
@@ -7051,6 +7188,7 @@ function PrescriptionValidationHub({ onBack }: { onBack?: () => void }) {
                 </div>
               ) : null}
             </div>
+
             {result.ifoodUrl ? (
               <div className="pt-1">
                 <Button variant="secondary" onClick={() => window.open(result.ifoodUrl, "_blank")}>
@@ -7394,29 +7532,6 @@ function DoctorDocumentComposer({ doctorEmail, kind }: { doctorEmail: string; ki
         if (y > 190) {
           doc.addPage();
           y = 20;
-        }
-
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
-        doc.text("Validação digital do documento", 10, y);
-        y += 5;
-
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(9);
-        const validationLines = doc.splitTextToSize(
-          `Código digital: ${verification.code} | Valide em: ${verification.verificationUrl}`,
-          pageWidth - 20
-        );
-        doc.text(validationLines, 10, y);
-        y += validationLines.length * 4.3 + 2;
-
-        if (verification.ifoodUrl) {
-          const ifoodLines = doc.splitTextToSize(
-            `Compra no iFood (farmácia): ${verification.ifoodUrl}`,
-            pageWidth - 20
-          );
-          doc.text(ifoodLines, 10, y);
-          y += ifoodLines.length * 4.3 + 4;
         }
 
         const validationQrDataUrl = await buildQrDataUrl(verification.verificationUrl);
@@ -8365,16 +8480,36 @@ function normalizePhoneDigits(phone: string) {
 }
 
 function extractConsultMainMedicineTerm(rawText: string) {
-  const firstLine = String(rawText || "")
+  const lines = String(rawText || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find(Boolean);
+    .filter(Boolean);
 
-  if (!firstLine) return "";
+  if (!lines.length) return "";
 
-  return firstLine
-    .replace(/\b(posologia|orienta(ç|c)(o|õ)es|uso|dose)\b.*$/i, "")
-    .trim();
+  for (const line of lines) {
+    const cleaned = line
+      .replace(/^receitu[aá]rio\s*:\s*/i, "")
+      .replace(/^prescri(ç|c)[aã]o\s*:\s*/i, "")
+      .replace(/\b(posologia|orienta(ç|c)(o|õ)es|uso|dose)\b\s*:\s*/i, "")
+      .replace(/\b(posologia|orienta(ç|c)(o|õ)es|uso|dose)\b.*$/i, "")
+      .replace(/[•\-–]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (cleaned && !/^\d+\s*(x|vez(es)?)?\b/i.test(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  return lines[0] || "";
+}
+
+function extractMedicineFromConsultationContent(consultationDocumentContent: string) {
+  const content = String(consultationDocumentContent || "");
+  const match = content.match(/Receitu[aá]rio:\s*([\s\S]*)/i);
+  const source = match ? match[1] : content;
+  return extractConsultMainMedicineTerm(source);
 }
 
 async function buildConsultQrDataUrl(text: string) {
@@ -8399,7 +8534,9 @@ async function buildConsultQrDataUrl(text: string) {
 }
 
 async function getConsultationVerificationPayload(child: Child, doctorEmail: string, consultationDocumentContent: string) {
-  const primaryMedicine = extractConsultMainMedicineTerm(receitas);
+  const fromReceitas = extractConsultMainMedicineTerm(receitas);
+  const fromContent = extractMedicineFromConsultationContent(consultationDocumentContent);
+  const primaryMedicine = fromReceitas || fromContent;
   const signResponse = await fetch("/api/prescription-sign", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -8686,7 +8823,13 @@ async function salvarConsulta() {
     if (verification?.code && verification?.verificationUrl) {
       setSendRxCode(verification.code);
       setSendRxVerificationUrl(verification.verificationUrl);
-      setSendRxIfoodUrl(verification.ifoodUrl || "");
+      const fallbackMedicine = extractConsultMainMedicineTerm(receitas);
+      setSendRxIfoodUrl(
+        verification.ifoodUrl ||
+          (fallbackMedicine
+            ? `https://www.ifood.com.br/busca?q=${encodeURIComponent(`${fallbackMedicine} farmácia`)}`
+            : "")
+      );
     } else {
       setSendRxCode("");
       setSendRxVerificationUrl("");
@@ -8857,29 +9000,6 @@ async function salvarConsulta() {
     if (y > 210) {
       doc.addPage();
       y = 20;
-    }
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.text("Validação digital do documento", 10, y);
-    y += 5;
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    const validationLines = doc.splitTextToSize(
-      `Código digital: ${verification.code} | Valide em: ${verification.verificationUrl}`,
-      pageWidth - 20
-    );
-    doc.text(validationLines, 10, y);
-    y += validationLines.length * 4.3 + 2;
-
-    if (verification.ifoodUrl) {
-      const ifoodLines = doc.splitTextToSize(
-        `Compra no iFood (farmácia): ${verification.ifoodUrl}`,
-        pageWidth - 20
-      );
-      doc.text(ifoodLines, 10, y);
-      y += ifoodLines.length * 4.3 + 3;
     }
 
     const validationQrDataUrl = await buildConsultQrDataUrl(verification.verificationUrl);
@@ -9315,43 +9435,6 @@ async function salvarConsulta() {
     {sendRxCode ? (
       <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-emerald-200">
         <div><b>Código digital do documento:</b> {sendRxCode}</div>
-        {sendRxVerificationUrl ? (
-          <div className="mt-1 break-all"><b>Validação:</b> {sendRxVerificationUrl}</div>
-        ) : null}
-        <div className="grid gap-2 md:grid-cols-2 mt-2">
-          {sendRxVerificationUrl ? (
-            <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
-              <div className="text-xs font-semibold text-emerald-800">QR validação</div>
-              <img
-                src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(sendRxVerificationUrl)}`}
-                alt="QR validação consulta"
-                className="mt-2 h-[150px] w-[150px] rounded-md bg-white"
-              />
-            </div>
-          ) : null}
-          {sendRxIfoodUrl ? (
-            <div className="rounded-lg bg-white p-2 ring-1 ring-emerald-200">
-              <div className="text-xs font-semibold text-emerald-800">QR iFood</div>
-              <img
-                src={`https://quickchart.io/qr?size=150&text=${encodeURIComponent(sendRxIfoodUrl)}`}
-                alt="QR iFood consulta"
-                className="mt-2 h-[150px] w-[150px] rounded-md bg-white"
-              />
-            </div>
-          ) : null}
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {sendRxIfoodUrl ? (
-            <Button variant="secondary" onClick={() => window.open(sendRxIfoodUrl, "_blank")}>
-              Abrir compra no iFood
-            </Button>
-          ) : null}
-          {sendRxVerificationUrl ? (
-            <Button variant="secondary" onClick={() => window.open(sendRxVerificationUrl, "_blank")}>
-              Abrir validação da receita
-            </Button>
-          ) : null}
-        </div>
       </div>
     ) : null}
 

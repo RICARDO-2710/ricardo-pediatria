@@ -11,14 +11,17 @@ function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-function isValidFromField(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return false;
-
-  if (isValidEmail(trimmed)) return true;
-
-  const namedFormat = /^.+<\s*[^\s@]+@[^\s@]+\.[^\s@]+\s*>$/;
-  return namedFormat.test(trimmed);
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return entities[character];
+  });
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -48,19 +51,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "URL do PDF inválida." });
   }
 
-  const resendApiKey = process.env.RESEND_API_KEY;
-  const rawFrom = String(process.env.EMAIL_FROM || "").trim();
-  const fromEmail = isValidFromField(rawFrom) ? rawFrom : "onboarding@resend.dev";
+  const brevoApiKey = process.env.BREVO_API_KEY?.trim();
+  const senderEmail = String(process.env.BREVO_SENDER_EMAIL || "").trim();
+  const senderName = String(process.env.BREVO_SENDER_NAME || "Rbg Pediatria").trim();
 
-  if (!resendApiKey) {
+  if (!brevoApiKey) {
     return res.status(500).json({
-      error:
-        "RESEND_API_KEY não configurada. Configure RESEND_API_KEY e EMAIL_FROM no ambiente para enviar e-mail automaticamente.",
+      error: "BREVO_API_KEY não configurada. Adicione a chave API do Brevo ao arquivo .env.local.",
+    });
+  }
+
+  if (!isValidEmail(senderEmail)) {
+    return res.status(500).json({
+      error: "BREVO_SENDER_EMAIL inválido. Configure o e-mail remetente verificado no Brevo.",
     });
   }
 
   const subject = `Consulta pediátrica - ${normalizedChildName}`;
-  const senderName = doctorName?.trim() || "Equipe Pediatria";
+  const signature = doctorName?.trim() || senderName;
 
   const text = [
     "Olá!",
@@ -69,44 +77,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     normalizedPdfUrl,
     "",
     `Atenciosamente,`,
-    senderName,
+    signature,
   ].join("\n");
 
+  const safeChildName = escapeHtml(normalizedChildName);
+  const safePdfUrl = escapeHtml(normalizedPdfUrl);
+  const safeSignature = escapeHtml(signature);
   const html = `
     <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a;">
       <p>Olá!</p>
-      <p>Segue o PDF da consulta de <strong>${normalizedChildName}</strong>:</p>
-      <p><a href="${normalizedPdfUrl}" target="_blank" rel="noopener noreferrer">Abrir PDF da consulta</a></p>
-      <p>Atenciosamente,<br/>${senderName}</p>
+      <p>Segue o PDF da consulta de <strong>${safeChildName}</strong>:</p>
+      <p><a href="${safePdfUrl}" target="_blank" rel="noopener noreferrer">Abrir PDF da consulta</a></p>
+      <p>Atenciosamente,<br/>${safeSignature}</p>
     </div>
   `;
 
-  const resendResponse = await fetch("https://api.resend.com/emails", {
+  const brevoResponse = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${resendApiKey}`,
+      "api-key": brevoApiKey,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: fromEmail,
-      to: [normalizedEmail],
+      sender: { email: senderEmail, name: senderName },
+      to: [{ email: normalizedEmail }],
       subject,
-      text,
-      html,
+      textContent: text,
+      htmlContent: html,
     }),
   });
 
-  if (!resendResponse.ok) {
-    const details = await resendResponse.text();
+  if (!brevoResponse.ok) {
+    const details = await brevoResponse.text();
 
-    if (resendResponse.status === 422 && /from/i.test(details)) {
+    if (/sender|verified|verification/i.test(details)) {
       return res.status(502).json({
         error:
-          "EMAIL_FROM inválido. Use formato email@dominio.com ou Nome <email@dominio.com>.",
+          "O Brevo não aceitou o remetente. Confirme o endereço em Transactional > Settings > Senders dentro da conta Brevo.",
       });
     }
 
-    return res.status(502).json({ error: `Falha ao enviar e-mail: ${details}` });
+    if (/unauthorized|unrecognised ip|authorized ip|authorised ip/i.test(details)) {
+      return res.status(403).json({
+        error:
+          "O Brevo bloqueou a chamada porque o IP atual não está autorizado. Adicione o IP público do servidor em Brevo > Settings > Security > Authorized IPs e tente novamente.",
+      });
+    }
+
+    return res.status(502).json({ error: `Falha ao enviar e-mail pelo Brevo: ${details}` });
   }
 
   return res.status(200).json({ ok: true });
